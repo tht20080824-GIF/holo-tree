@@ -19,7 +19,8 @@ import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { CONFIG } from './config.js';
 import { buildTreeLayout } from './layout.js';
 import { createRibbon } from './ribbon.js';
-import { createOrnamentSet } from './ornaments.js';
+import { giftShape, bowShape, placeShape } from './ornament-shapes.js';
+import { placeOrnaments, makeScatterPoint } from './ornament-math.js';
 import { MODE } from './gesture.js';
 
 const TMP_OBJ = new THREE.Object3D();
@@ -272,14 +273,108 @@ export class HoloTree {
     this._ribbonOpacity = 1; // 散开态时淡出
   }
 
-  /** 圣诞装饰：小礼盒 + 蝴蝶结，数量克制，挂在树身外侧 */
+  /**
+   * 圣诞装饰：用**和树身完全相同的粒子**拼出礼盒与蝴蝶结。
+   *
+   * 关键点：
+   * - 复用 this.particles 的 geometry / material（材质真正同步，不是模仿）
+   * - 每个装饰粒子有 home（拼形状）和 scatter（散开位置）两套坐标
+   * - 合拢时 lerp 到 home，散开时 lerp 到 scatter —— 和树身粒子同一套缓动
+   */
   _initOrnaments() {
     const { height, floorY, radius } = this.cfg.particles;
-    this.ornamentSet = createOrnamentSet({
-      cfg: this.cfg.ornaments,
-      shape: { height, floorY, baseRadius: radius },
+    const cfg = this.cfg.ornaments;
+
+    const giftSpots = placeOrnaments({
+      count: cfg.gifts,
+      height, floorY, baseRadius: radius,
+      tMin: 0.18, tMax: 0.56, clearance: 1.18,
     });
-    this.treeRoot.add(this.ornamentSet.group);
+
+    const bowSpots = placeOrnaments({
+      count: cfg.bows,
+      height, floorY, baseRadius: radius,
+      tMin: 0.44, tMax: 0.86, clearance: cfg.bowClearance,
+    });
+
+    const points = [];
+    for (const spot of giftSpots) {
+      const shape = giftShape(cfg.giftSize * spot.scale, Math.random, cfg.density);
+      points.push(...placeShape(shape, spot));
+    }
+    for (const spot of bowSpots) {
+      const shape = bowShape(cfg.bowSize * spot.scale, Math.random, cfg.density);
+      points.push(...placeShape(shape, spot));
+    }
+
+    const count = points.length;
+    const mesh = new THREE.InstancedMesh(this.particles.geometry, this.particles.material, count);
+    mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+    mesh.frustumCulled = false;
+
+    this.ornamentHome = new Float32Array(count * 3);
+    this.ornamentScatter = new Float32Array(count * 3);
+    this.ornamentPos = new Float32Array(count * 3);
+    this.ornamentSeed = new Float32Array(count);
+    this.ornamentSize = new Float32Array(count);
+
+    points.forEach((p, i) => {
+      const i3 = i * 3;
+      this.ornamentHome[i3] = p.x;
+      this.ornamentHome[i3 + 1] = p.y;
+      this.ornamentHome[i3 + 2] = p.z;
+
+      this.ornamentPos[i3] = p.x;
+      this.ornamentPos[i3 + 1] = p.y;
+      this.ornamentPos[i3 + 2] = p.z;
+
+      const scatter = makeScatterPoint();
+      this.ornamentScatter[i3] = scatter.x;
+      this.ornamentScatter[i3 + 1] = scatter.y;
+      this.ornamentScatter[i3 + 2] = scatter.z;
+
+      this.ornamentSeed[i] = Math.random() * 100;
+      this.ornamentSize[i] = p.size;
+
+      TMP_COLOR.setHex(p.color);
+      mesh.setColorAt(i, TMP_COLOR);
+    });
+    mesh.instanceColor.needsUpdate = true;
+
+    this.ornamentMesh = mesh;
+    this.ornamentCount = count;
+    this.treeRoot.add(mesh);
+  }
+
+  /** 装饰粒子的每帧运动：和树身粒子同一套指数插值 */
+  _updateOrnaments(dt, t) {
+    if (!this.ornamentMesh) return;
+
+    const target = this.mode === MODE.TREE ? this.ornamentHome : this.ornamentScatter;
+    const stiffness = this.mode === MODE.TREE ? 3.6 : 2.1;
+    const k = 1 - Math.exp(-stiffness * dt);
+
+    for (let i = 0; i < this.ornamentCount; i++) {
+      const i3 = i * 3;
+      const noise = Math.sin(t * 1.3 + this.ornamentSeed[i]) * 0.06;
+
+      this.ornamentPos[i3] += (target[i3] - this.ornamentPos[i3]) * k;
+      this.ornamentPos[i3 + 1] += (target[i3 + 1] - this.ornamentPos[i3 + 1]) * k + noise * 0.02;
+      this.ornamentPos[i3 + 2] += (target[i3 + 2] - this.ornamentPos[i3 + 2]) * k;
+
+      TMP_OBJ.position.set(this.ornamentPos[i3], this.ornamentPos[i3 + 1], this.ornamentPos[i3 + 2]);
+      TMP_OBJ.rotation.set(
+        this.ornamentSeed[i] * 6 + t * (this.mode === MODE.TREE ? 0.15 : 0.9),
+        this.ornamentSeed[i] * 3,
+        0,
+      );
+      TMP_OBJ.scale.setScalar(
+        this.ornamentSize[i] * (0.85 + 0.22 * Math.sin(t * 2.2 + this.ornamentSeed[i])),
+      );
+      TMP_OBJ.updateMatrix();
+      this.ornamentMesh.setMatrixAt(i, TMP_OBJ.matrix);
+    }
+    this.ornamentMesh.instanceMatrix.needsUpdate = true;
   }
 
   _initDecor() {
@@ -685,7 +780,7 @@ export class HoloTree {
     const ribbonTarget = this.mode === MODE.TREE ? 1 : 0;
     this._ribbonOpacity += (ribbonTarget - this._ribbonOpacity) * (1 - Math.exp(-4 * dt));
     this.ribbon.update(dt, this.camera, this.renderer.getPixelRatio(), this._ribbonOpacity);
-    this.ornamentSet.update(dt, this.time, this.mode === MODE.SCATTER);
+    this._updateOrnaments(dt, this.time);
 
     this.composer.render();
   }

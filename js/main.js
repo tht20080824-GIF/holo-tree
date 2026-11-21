@@ -25,8 +25,9 @@ if (isTouchDevice || isSmallScreen) {
   CONFIG.quality.maxPixelRatio = 1.75;  // 手机上 3x DPR 会直接掉到 20fps
   CONFIG.photos.defaultCount = 5;
   CONFIG.ribbon.count = 5000;   // 光带也要降，否则手机掉帧
-  CONFIG.ornaments.gifts = 3;
+  CONFIG.ornaments.gifts = 4;
   CONFIG.ornaments.bows = 2;
+  CONFIG.ornaments.density = 0.6;   // 装饰粒子密度减半，手机才稳
 }
 
 // ---------------------------------------------------------------- 全局错误兜底
