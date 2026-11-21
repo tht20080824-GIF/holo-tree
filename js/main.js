@@ -443,13 +443,15 @@ let perfFrames = 0;
 function shouldRenderFrame(now) {
   if (lastRafAt) rafGap += ((now - lastRafAt) - rafGap) * 0.1;
   lastRafAt = now;
-  if (rafGap <= 10.2 && now - lastTime < 1000 / 61 - 1) return false; // 120Hz → 60fps
-  return true;
+  // 统一 60fps 上限：不管是 120 / 90 / 144Hz，都隔到 60 这一档
+  // （90Hz 会落到 45、144Hz 会落到 48，这是 rAF 整数倍跳帧的物理限制）
+  return now - lastTime >= 1000 / 61 - 1;
 }
 
 function governFrameRate(dt) {
   renderFps += (1 / Math.max(dt, 1e-3) - renderFps) * 0.05;
-  if (intro) return;    // 开场用独立的 composer，先别动像素比，免得尺寸不同步
+  if (intro) return;          // 开场用独立的 composer，先别动像素比，免得尺寸不同步
+  if (rafGap < 16) return;    // 高刷屏（>60Hz）是主动隔帧，不是性能不够，别再降画质
   perfElapsed += dt;
   perfFrames++;
   if (perfElapsed < 1.2) return;
