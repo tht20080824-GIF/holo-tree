@@ -19,7 +19,7 @@ import urllib.request
 
 TOKEN = os.environ.get("GH_TOKEN", "").strip()
 REPO = os.environ.get("GH_REPO", "holo-tree")
-SOURCE = os.environ.get("GH_SOURCE", "dist/index.html")  # 单文件成品
+SOURCE = os.environ.get("GH_SOURCE", "docs/index.html")  # 单文件成品
 API = "https://api.github.com"
 
 
@@ -105,7 +105,7 @@ print(f"✓ 已上传 {SOURCE}（{len(content) * 3 // 4 // 1024} KB）")
 
 # 3) 打开 Pages
 status, pages = call("POST", f"/repos/{login}/{REPO}/pages", {
-    "source": {"branch": branch, "path": "/"},
+    "source": {"branch": branch, "path": "/docs"},
 })
 if status == 201:
     print("✓ 已开启 GitHub Pages")
@@ -114,7 +114,7 @@ elif status == 409:
 else:
     # 没开成功就再试一次显式更新
     status, pages = call("PUT", f"/repos/{login}/{REPO}/pages", {
-        "source": {"branch": branch, "path": "/"},
+        "source": {"branch": branch, "path": "/docs"},
     })
     if status not in (200, 204):
         fail(f"开启 Pages 失败（HTTP {status}）", str(pages)[:300])

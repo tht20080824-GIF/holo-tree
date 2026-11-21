@@ -275,10 +275,13 @@ html = html.replace(
 if (html.includes('__defs') === false) throw new Error('入口脚本没有被替换，检查 index.html 的 script 标签');
 if (!CDN_MODE && /<script[^>]+src=/.test(html)) throw new Error('产物里还有外链 script，单文件要求全部内联');
 
-const outDir = CDN_MODE ? 'dist-cdn' : 'dist';
+const outDir = CDN_MODE ? 'dist-cdn' : 'docs';
 fs.mkdirSync(path.join(root, outDir), { recursive: true });
-const outName = '圣诞树.html';
-fs.writeFileSync(path.join(root, outDir, outName), html, 'utf8');
+// 单文件版只要 docs/index.html（Pages 的发布入口）；
+// CDN 版同时留一份中文名，方便直接发给别人
+if (CDN_MODE) {
+  fs.writeFileSync(path.join(root, outDir, '圣诞树.html'), html, 'utf8');
+}
 fs.writeFileSync(path.join(root, outDir, 'index.html'), html, 'utf8');
 
 const kb = (n) => `${(n / 1024).toFixed(0)}KB`;
@@ -286,4 +289,4 @@ console.log('—— 单文件构建 ——');
 console.log(`  模块数 ${order.length}`);
 console.log(`  JS   ${kb(bundle.length)}`);
 console.log(`  CSS  ${kb(css.length)}`);
-console.log(`  产物 ${kb(html.length)}  → ${outDir}/${outName}（同名 index.html 也写了一份）`);
+console.log(`  产物 ${kb(html.length)}  → ${outDir}/index.html`);

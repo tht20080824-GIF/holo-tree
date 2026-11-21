@@ -177,7 +177,7 @@ Nginx 默认就够用；如果手势加载报错，先看 Network 里这个文�
 node tools/bundle.mjs        # 重新生成
 ```
 
-产物：`dist/圣诞树.html`（约 1.3MB，`dist/index.html` 是同一份，方便部署）。
+产物：`docs/index.html`（约 1.3MB）。这个目录同时也是 GitHub Pages 的发布源。
 
 这个文件把 three.js、插件、我们的全部代码和 CSS 都内联进去了：
 **没有任何外部请求**，断网、双击、发微信、AirDrop 给谁都能打开。
@@ -201,6 +201,7 @@ node tools/bundle.mjs        # 重新生成
 
 ### 单文件版和完整版的关系
 
-- 完整版（`index.html` + `js/` + `vendor/`）：带摄像头手势，依赖都在本地，适合自己长期用/二次开发。
+- 完整版（仓库根 `index.html` + `js/` + `vendor/`）：带摄像头手势，依赖都在本地，适合自己长期用/二次开发。
+- `docs/index.html`：单文件成品，也是 Pages 发布的内容，改完源码用 `tools/sync-github.sh` 同步。
 - 单文件版：同一套源码打包产物，零依赖，适合分享。
 - 改完源码后跑一次 `node tools/bundle.mjs` 就能同步，不用手工改两遍。

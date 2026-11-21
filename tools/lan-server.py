@@ -20,7 +20,7 @@ import sys
 import threading
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-SERVE_DIR = os.path.join(ROOT, "dist")
+SERVE_DIR = os.path.join(ROOT, "docs")
 CERT = os.path.join(ROOT, "tools", ".lan-cert.pem")
 KEY = os.path.join(ROOT, "tools", ".lan-key.pem")
 
