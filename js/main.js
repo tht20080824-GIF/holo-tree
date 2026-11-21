@@ -162,6 +162,8 @@ function endIntro() {
   document.body.classList.remove('intro-on');
   els.loader.classList.add('hidden');
   if (handoff) handoffToMainBody(camFrom);
+  // 手机上「怎么玩」面板是收起的，开场结束后给一条一次性提示
+  if (isTouchDevice) toast('点相框看大图 · 右上 ＋ 换照片');
 }
 
 // 闪屏之后不再切黑场：主场景先铺成散开态，再用 0.26s 收拢成主体。

@@ -605,7 +605,9 @@ body.ui-hidden #debug { opacity: 0; pointer-events: none; }
       <li><b>移动手掌</b> 左右转 / 上下抬</li>
       <li><b>手靠近镜头</b> 拉近，远离拉远</li>
       <li><b>五指张开</b> 散开 · <b>握拳</b> 合拢</li>
-      <li><b>拇指食指捏合</b> 撒一把金粒子</li>
+      <li><b>拇指食指捏合</b> 指相框展开照片，空着撒金粒子</li>
+      <li><b>点相框</b> 也能展开 · 再点一下关闭</li>
+      <li><b>＋ 加照片</b> 换成自己的照片（可多张）</li>
       <li><b>点 ↻</b> 重播开场</li>
     </ul>
     <div class="legend-foot">没有摄像头？鼠标拖拽 + 滚轮同样能玩</div>
@@ -630,7 +632,7 @@ body.ui-hidden #debug { opacity: 0; pointer-events: none; }
 
   <div id="toast"></div>
 
-  <script>window.__HOLO_NO_VENDOR__ = true; window.__HOLO_BUILD__ = "2026-11-21T22:01:39.182Z";</script>
+  <script>window.__HOLO_NO_VENDOR__ = true; window.__HOLO_BUILD__ = "2026-11-21T22:29:18.159Z";</script>
 <script>
 /* 由 tools/bundle.mjs 生成 —— 不要手改，改源码后重新构建 */
 (function () {
@@ -807,6 +809,8 @@ function endIntro() {
   document.body.classList.remove('intro-on');
   els.loader.classList.add('hidden');
   if (handoff) handoffToMainBody(camFrom);
+  // 手机上「怎么玩」面板是收起的，开场结束后给一条一次性提示
+  if (isTouchDevice) toast('点相框看大图 · 右上 ＋ 换照片');
 }
 
 // 闪屏之后不再切黑场：主场景先铺成散开态，再用 0.26s 收拢成主体。
