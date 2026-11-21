@@ -87,34 +87,20 @@ try {
   throw err;
 }
 
-// ------------------------------------------------------------------ 照片全屏浮层
-// 用 DOM 而不是 3D 里的平面来放大照片：这样浮层跟渲染循环完全解耦，
-// 树在背后照常转、雪照常落，不会因为"在看照片"就暂停。
-
-const photoView = document.createElement('div');
-photoView.id = 'photo-view';
-photoView.innerHTML = `
-  <button type="button" class="pv-close" aria-label="关闭">×</button>
-  <img alt="照片" />
-  <div class="pv-hint">点任意处关闭 · 圣诞树仍在背后转动</div>
-`;
-document.body.appendChild(photoView);
-const photoImg = photoView.querySelector('img');
+// ------------------------------------------------------------------ 照片聚焦
+// 照片不再用 DOM 弹层，而是把相框本身"拔"到镜头前（效果见 tree.js 的 focusPhoto）。
+// 好处是渲染循环完全不中断：树照常转、雪照常落，照片就悬在场景中央。
 
 function openPhoto(node) {
-  const src = tree.photoSource(node);
-  if (!src) return;
-  photoImg.src = src;
-  photoView.classList.add('on');
+  if (!node) return;
+  tree.focusPhoto(node);
   tree.setHovered(null);
 }
 
 function closePhoto() {
-  photoView.classList.remove('on');
-  photoImg.removeAttribute('src');
+  tree.unfocusPhoto();
 }
 
-photoView.addEventListener('click', closePhoto);
 window.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') closePhoto();
 });
@@ -167,6 +153,7 @@ const canvasEl = els.app.querySelector('canvas');
 attachPointerControls(canvasEl, rig, {
   onDoubleTap: () => switchMode(rig.mode === MODE.TREE ? MODE.SCATTER : MODE.TREE),
   onTap: (cx, cy) => {
+    if (tree.focusedPhoto) { closePhoto(); return; }
     const node = tree.pickAt(cx / window.innerWidth, cy / window.innerHeight);
     if (node) openPhoto(node);
   },
@@ -301,14 +288,14 @@ function frame(now) {
 
   // 捏合：指着相框就展开，空着就撒花
   if (out.pinched && !frame._wasPinched) {
-    const picked = out.hand ? tree.hovered : null;
-    if (picked) openPhoto(picked);
+    if (tree.focusedPhoto) closePhoto();
+    else if (out.hand && tree.hovered) openPhoto(tree.hovered);
     else fireBurst();
   }
   frame._wasPinched = out.pinched;
 
   // 手悬停在相框上时放大一点，作为"可点击"的反馈
-  if (out.hand && !photoView.classList.contains('on')) {
+  if (out.hand && !tree.focusedPhoto) {
     tree.setHovered(tree.pickAt(out.hand.x, out.hand.y));
   } else if (!out.hand) {
     tree.setHovered(null);

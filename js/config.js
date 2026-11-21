@@ -32,9 +32,12 @@ export const CONFIG = {
     follow: 5.5,           // 跟随刚度，越大越跟手越容易抖
 
     // --- 判向持续旋转（新交互） ---
-    steerEnter: 0.45,      // 手的横向偏移超过它 → 判定为「往这个方向转」
-    steerHold: 0.12,       // 方向要保持多久才生效（秒），防抖
-    steerSpeed: 0.62,      // 判定方向后的持续转速（弧度/秒 ≈ 35°/s）
+    steerEnter: 0.30,      // 手的横向偏移超过它 → 判定为「往这个方向转」（越低越果断）
+    steerHold: 0.06,       // 方向要保持多久才生效（秒）；手甩得快时会被速度直接抢判，不等这个时间
+    steerSpeed: 0.62,      // 基础持续转速（弧度/秒 ≈ 35°/s）
+    steerBoost: 0.9,       // 手速带来的额外倍率上限：最快 ≈ 1.9 倍速
+    steerRefSpeed: 1.4,    // 达到满加成所需的手速（画面宽度/秒）
+    steerKickSpeed: 1.2,   // 横向手速超过它，方向立刻生效，不等 steerHold
     centerStop: 0.18,      // 手回到中心 ±18% 内持续 centerStopTime 秒 → 停止转向
     centerStopTime: 0.8,
 

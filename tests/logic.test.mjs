@@ -210,14 +210,53 @@ test('Rig：方向可以左右切换', () => {
   assert.ok(rig.yawTarget < before, '切换后应朝反方向累加');
 });
 
-test('Rig：手只是快速扫过阈值（短于 steerHold）不会改方向', () => {
+test('Rig：手停在阈值内侧（不够果断的幅度）不会锁定方向', () => {
   const rig = new Rig(CONFIG.rig);
-  const right = measureHand(makeHand({ px: 0.08 }));
+  // 偏移只有 0.2（nx≈0.4 的量级），低于 steerEnter
+  const nearCenter = measureHand(makeHand({ px: 0.42 }));
+  for (let i = 0; i < 30; i++) rig.update(1 / 60, nearCenter);
+  assert.equal(rig.spinDir, 0, '幅度不够时不应锁定');
+});
+
+test('Rig：手快速甩向一侧会立即锁定（速度抢判，不等 steerHold）', () => {
+  const rig = new Rig(CONFIG.rig);
+  const dt = 1 / 60;
   const center = measureHand(makeHand({ px: 0.5 }));
 
-  for (let i = 0; i < 3; i++) rig.update(1 / 60, right); // 只有 50ms
-  for (let i = 0; i < 10; i++) rig.update(1 / 60, center);
-  assert.equal(rig.spinDir, 0, '短暂扫过不应锁定方向');
+  rig.update(dt, center);
+  // 一帧之内甩到右侧：速度极大
+  const far = measureHand(makeHand({ px: 0.15 }));
+  rig.update(dt, far);
+  rig.update(dt, far);
+  assert.equal(rig.spinDir, 1, '快速甩动应立即锁向');
+});
+
+test('Rig：手移动越快，转速越快（手速加速）', () => {
+  const dt = 1 / 60;
+
+  // A：手停在右侧不动
+  const slow = new Rig(CONFIG.rig);
+  const still = measureHand(makeHand({ px: 0.2 }));
+  for (let i = 0; i < 10; i++) slow.update(dt, still);
+  const base = slow.yawTarget;
+  for (let i = 0; i < 20; i++) slow.update(dt, still);
+  const slowGain = slow.yawTarget - base;
+
+  // B：手持续向右快速移动
+  const fast = new Rig(CONFIG.rig);
+  let farX = 0.45;
+  for (let i = 0; i < 10; i++) fast.update(dt, measureHand(makeHand({ px: farX })));
+  fast.update(dt, measureHand(makeHand({ px: 0.42 })));
+  const fastBase = fast.yawTarget;
+  for (let i = 0; i < 20; i++) {
+    farX = Math.max(0.05, 0.42 - i * 0.02);
+    fast.update(dt, measureHand(makeHand({ px: farX })));
+  }
+  const fastGain = fast.yawTarget - fastBase;
+
+  assert.ok(fast.speedMul > 1.05, `手速倍率应大于 1，实际 ${fast.speedMul.toFixed(2)}`);
+  assert.ok(fastGain > slowGain * 1.15,
+    `快速移动应转得更快：慢 ${slowGain.toFixed(2)} vs 快 ${fastGain.toFixed(2)}`);
 });
 
 test('Rig：手出现不会打断已锁定的方向', () => {

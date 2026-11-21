@@ -38,6 +38,32 @@ function radialTexture(inner, outer, size = 256) {
   return tex;
 }
 
+/** 聚焦时的描边光效：画一个带辉光的圆角方框 */
+function frameGlowTexture(size = 512) {
+  const canvas = document.createElement('canvas');
+  canvas.width = canvas.height = size;
+  const ctx = canvas.getContext('2d');
+  const inset = size * 0.1;
+  const r = size * 0.04;
+
+  ctx.strokeStyle = 'rgba(255, 214, 140, 0.95)';
+  ctx.lineWidth = size * 0.016;
+  ctx.shadowColor = 'rgba(255, 170, 70, 0.95)';
+  ctx.shadowBlur = size * 0.06;
+  ctx.beginPath();
+  if (typeof ctx.roundRect === 'function') {
+    ctx.roundRect(inset, inset, size - inset * 2, size - inset * 2, r);
+  } else {
+    ctx.rect(inset, inset, size - inset * 2, size - inset * 2);
+  }
+  ctx.stroke();
+  ctx.stroke(); // 描两遍，辉光更实
+
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  return tex;
+}
+
 /** 没有上传照片时，程序生成的节日装饰图（省得默认一片空白） */
 function ornamentTexture(kind) {
   const size = 256;
@@ -101,6 +127,9 @@ export class HoloTree {
     this._ndc = new THREE.Vector2();
     this.photos = [];
     this.hovered = null;
+
+    // 照片聚焦（飞到镜头前）状态
+    this.focus = { node: null, t: 0, closing: false };
 
     this._initRenderer();
     this._initScene();
@@ -167,6 +196,14 @@ export class HoloTree {
     glow.scale.set(40, 40, 1);
     glow.position.set(0, this.cfg.particles.floorY - 2, 0);
     this.scene.add(glow);
+
+    // 聚焦照片时的背景压暗层：放在照片更远处，只压暗树和粒子，不压照片
+    this.dimPlane = new THREE.Mesh(
+      new THREE.PlaneGeometry(1, 1),
+      new THREE.MeshBasicMaterial({ color: 0x03060a, transparent: true, opacity: 0, depthWrite: false }),
+    );
+    this.dimPlane.visible = false;
+    this.scene.add(this.dimPlane);
   }
 
   _initParticles() {
@@ -283,6 +320,143 @@ export class HoloTree {
     this.decor.add(group);
     this.photos.push(group);
     return group;
+  }
+
+  /**
+   * 照片聚焦：把相框从树里"拔"出来，飞到镜头前居中放大。
+   * 用的是 3D 对象本身，不是网页弹层 —— 所以树在背后照常转、雪照常落。
+   */
+  focusPhoto(node) {
+    if (!node) return;
+    if (this.focus.node === node) return;
+    if (this.focus.node) this._restoreFocus();
+
+    // 悬停放大过的话，先还原，否则会把 1.12 倍当成"原位姿"记下来
+    this.setHovered(null);
+
+    const home = {
+      parent: node.parent,
+      local: {
+        position: node.position.clone(),
+        quaternion: node.quaternion.clone(),
+        scale: node.scale.clone(),
+      },
+    };
+
+    this.scene.attach(node); // 保留世界位置地挪到场景根下，动画才不会打架
+    node.userData.focusHome = home;
+
+    if (!node.userData.focusGlow) {
+      const glow = new THREE.Mesh(
+        new THREE.PlaneGeometry(1.9, 1.9),
+        new THREE.MeshBasicMaterial({
+          map: frameGlowTexture(),
+          transparent: true,
+          opacity: 0,
+          depthWrite: false,
+          blending: THREE.AdditiveBlending,
+          toneMapped: false,
+        }),
+      );
+      glow.position.z = -0.06;
+      node.add(glow);
+      node.userData.focusGlow = glow;
+    }
+
+    this.focus.node = node;
+    this.focus.closing = false;
+    this.focus.t = Math.max(this.focus.t, 0.001);
+  }
+
+  unfocusPhoto() {
+    if (this.focus.node) this.focus.closing = true;
+  }
+
+  get focusedPhoto() {
+    return this.focus.node;
+  }
+
+  _restoreFocus() {
+    const f = this.focus;
+    const node = f.node;
+    if (!node) return;
+
+    const home = node.userData.focusHome;
+    if (home) {
+      home.parent.add(node);
+      node.position.copy(home.local.position);
+      node.quaternion.copy(home.local.quaternion);
+      node.scale.copy(home.local.scale);
+      node.userData.focusHome = null;
+    }
+    if (node.userData.focusGlow) node.userData.focusGlow.material.opacity = 0;
+
+    f.node = null;
+    f.t = 0;
+    f.closing = false;
+  }
+
+  _updateFocus(dt) {
+    const f = this.focus;
+
+    if (!f.node) {
+      if (this.dimPlane.visible) {
+        this.dimPlane.material.opacity *= Math.exp(-8 * dt);
+        this.dimPlane.visible = this.dimPlane.material.opacity > 0.005;
+      }
+      return;
+    }
+
+    const node = f.node;
+    const cam = this.camera;
+    const target = f.closing ? 0 : 1;
+    f.t += (target - f.t) * (1 - Math.exp(-7 * dt));
+
+    const dir = new THREE.Vector3(0, 0, -1).applyQuaternion(cam.quaternion);
+    const dist = 4.6;
+    const focusPos = cam.position.clone().addScaledVector(dir, dist);
+
+    // 让照片高约占画面 62%，手机竖屏也不会顶出边界
+    const visH = 2 * dist * Math.tan((cam.fov * Math.PI / 180) / 2);
+    const targetScale = (visH * 0.62) / 1.62;
+
+    // 原位姿要每帧重算：树一直在转，旧的世界坐标会飘
+    const home = node.userData.focusHome;
+    let homePos;
+    let homeQuat;
+    let homeScale;
+    if (home) {
+      home.parent.updateMatrixWorld();
+      homePos = home.local.position.clone().applyMatrix4(home.parent.matrixWorld);
+      homeQuat = home.parent
+        .getWorldQuaternion(new THREE.Quaternion())
+        .multiply(home.local.quaternion);
+      homeScale = home.local.scale.x;
+    } else {
+      homePos = focusPos.clone();
+      homeQuat = cam.quaternion.clone();
+      homeScale = targetScale;
+    }
+
+    const t = f.t;
+    node.position.lerpVectors(homePos, focusPos, t);
+    node.quaternion.slerpQuaternions(homeQuat, cam.quaternion, t);
+    node.scale.setScalar(homeScale + (targetScale - homeScale) * t);
+
+    if (node.userData.focusGlow) {
+      node.userData.focusGlow.material.opacity = 0.9 * t * (0.85 + 0.15 * Math.sin(this.time * 2.4));
+    }
+
+    // 背景压暗层：比照片更远 28%，只压暗后面的场景
+    const dimDist = dist * 1.28;
+    const dimH = 2 * dimDist * Math.tan((cam.fov * Math.PI / 180) / 2);
+    this.dimPlane.position.copy(cam.position).addScaledVector(dir, dimDist);
+    this.dimPlane.quaternion.copy(cam.quaternion);
+    this.dimPlane.scale.set(dimH * 1.7, dimH * 1.1, 1);
+    this.dimPlane.visible = t > 0.01;
+    this.dimPlane.material.opacity = 0.5 * t;
+
+    if (f.closing && f.t < 0.02) this._restoreFocus();
   }
 
   /**
@@ -475,6 +649,7 @@ export class HoloTree {
 
     this._updateSnow(dt);
     this._updateBursts(dt);
+    this._updateFocus(dt);
 
     this.composer.render();
   }

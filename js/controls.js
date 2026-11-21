@@ -47,6 +47,9 @@ export class Rig {
     this._cand = 0;
     this._candTime = 0;
     this._centerTime = 0;
+    this._lastHandX = null;
+    this.vx = 0;            // 手的横向速度（画面宽度/秒，平滑后）
+    this.speedMul = 1;      // 手速带来的转速倍率
 
     // 手机倾斜控制（js/gyro.js 驱动）
     this.gyroEnabled = false;
@@ -111,6 +114,15 @@ export class Rig {
       const nx = (hand.x - 0.5) * 2;   // 手在画面横向的位置，-1 左 / +1 右
       const ny = (hand.y - 0.5) * 2;
 
+      // 横向手速：用来「抢判方向」和「加速旋转」
+      if (this._lastHandX !== null && dt > 0) {
+        const raw = (hand.x - this._lastHandX) / dt;
+        this.vx += (raw - this.vx) * 0.45; // 平滑，别被单帧抖动带飞
+      }
+      this._lastHandX = hand.x;
+      const speedAbs = Math.min(Math.abs(this.vx) / c.steerRefSpeed, 1);
+      this.speedMul = 1 + speedAbs * c.steerBoost;
+
       // ---------- 判向：只看"手在哪一侧"，不管手是否停住 ----------
       const candidate = nx > c.steerEnter ? 1 : nx < -c.steerEnter ? -1 : 0;
       if (candidate !== this._cand) {
@@ -118,8 +130,15 @@ export class Rig {
         this._candTime = 0;
       }
       this._candTime += dt;
-      if (candidate !== 0 && this._candTime >= c.steerHold) {
-        this.spinDir = candidate; // 方向锁定，手移开也继续转
+      if (candidate !== 0) {
+        // 两种触发：① 稳定保持 steerHold；② 手甩得快（速度同向且够大）直接抢判。
+        // ② 是为了"果断"——用户明确往一侧摆的时候不该再等 60ms。
+        const kicked = this._candTime >= 2 * dt
+          && Math.abs(this.vx) > c.steerKickSpeed
+          && Math.sign(this.vx) === candidate;
+        if (this._candTime >= c.steerHold || kicked) {
+          this.spinDir = candidate; // 方向锁定，手移开也继续转
+        }
       }
 
       // ---------- 手回到中心并稳住 → 停止转向，回落自然自转 ----------
@@ -137,6 +156,10 @@ export class Rig {
     } else {
       this.handActive = false;
       this._idleTime += dt;
+      this._lastHandX = null;
+      // 手离开后手速衰减，转速回落到基础值
+      this.vx *= Math.exp(-6 * dt);
+      this.speedMul += (1 - this.speedMul) * (1 - Math.exp(-4 * dt));
 
       if (this.gyroEnabled) {
         // 陀螺仪接管时：绝对角度跟随手机倾斜，且不自动旋转
@@ -150,11 +173,12 @@ export class Rig {
       }
     }
 
-    // ---------- 持续旋转：方向锁定后就一直转，不依赖手是否还在 ----------
-    const speed = this.spinDir !== 0 ? c.steerSpeed : c.idleYawSpeed;
-    this.yawTarget += this.spinDir * speed * dt;
-    // spinDir 为 0 时上式加的是 0，所以自然自转单独补上
-    if (this.spinDir === 0) this.yawTarget += c.idleYawSpeed * dt;
+    // ---------- 持续旋转：方向锁定后就一直转，手甩得越快转得越快 ----------
+    if (this.spinDir !== 0) {
+      this.yawTarget += this.spinDir * c.steerSpeed * this.speedMul * dt;
+    } else {
+      this.yawTarget += c.idleYawSpeed * dt;
+    }
 
     return this._settle(dt, k);
   }

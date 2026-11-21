@@ -399,65 +399,7 @@ body.ui-hidden #debug { opacity: 0; pointer-events: none; }
   min-height: 1em;
 }
 
-/* ------------------------------------------------- 相框全屏浮层 */
-/* 用独立的 DOM 浮层放大照片：渲染循环完全不受影响，树在背后继续转 */
-#photo-view {
-  position: fixed;
-  inset: 0;
-  z-index: 80;
-  display: none;
-  align-items: center;
-  justify-content: center;
-  background: rgba(2, 6, 10, 0.84);
-  -webkit-backdrop-filter: blur(10px);
-  backdrop-filter: blur(10px);
-  animation: pv-fade 0.28s ease;
-}
-#photo-view.on { display: flex; }
-@keyframes pv-fade { from { opacity: 0; } to { opacity: 1; } }
-
-#photo-view img {
-  max-width: 88vw;
-  max-height: 76vh;
-  border-radius: 14px;
-  border: 2px solid rgba(233, 201, 124, 0.55);
-  box-shadow: 0 30px 90px rgba(0, 0, 0, 0.65), 0 0 40px rgba(233, 201, 124, 0.12);
-  transform: scale(0.94);
-  transition: transform 0.32s cubic-bezier(0.2, 0.9, 0.3, 1);
-}
-#photo-view.on img { transform: scale(1); }
-
-.pv-close {
-  position: absolute;
-  top: 20px;
-  right: 22px;
-  width: 40px;
-  height: 40px;
-  border-radius: 50%;
-  border: 1px solid rgba(255, 255, 255, 0.22);
-  background: rgba(10, 16, 22, 0.7);
-  color: #e8eef2;
-  font-size: 20px;
-  line-height: 1;
-  cursor: pointer;
-}
-.pv-close:hover { background: rgba(255, 255, 255, 0.14); }
-
-.pv-hint {
-  position: absolute;
-  bottom: 26px;
-  left: 50%;
-  transform: translateX(-50%);
-  font-size: 11.5px;
-  letter-spacing: 0.08em;
-  color: #8fa3ad;
-}
-
-@media (max-width: 720px), (pointer: coarse) {
-  #photo-view img { max-width: 92vw; max-height: 68vh; }
-  .pv-close { top: 14px; right: 14px; width: 36px; height: 36px; }
-  .pv-hint { bottom: 18px; font-size: 10.5px; }
-}
+/* 照片聚焦已改为 3D 动画（见 js/tree.js 的 focusPhoto），这里不再需要 DOM 浮层样式 */
 
 </style>
 
@@ -626,34 +568,20 @@ try {
   throw err;
 }
 
-// ------------------------------------------------------------------ 照片全屏浮层
-// 用 DOM 而不是 3D 里的平面来放大照片：这样浮层跟渲染循环完全解耦，
-// 树在背后照常转、雪照常落，不会因为"在看照片"就暂停。
-
-const photoView = document.createElement('div');
-photoView.id = 'photo-view';
-photoView.innerHTML = `
-  <button type="button" class="pv-close" aria-label="关闭">×</button>
-  <img alt="照片" />
-  <div class="pv-hint">点任意处关闭 · 圣诞树仍在背后转动</div>
-`;
-document.body.appendChild(photoView);
-const photoImg = photoView.querySelector('img');
+// ------------------------------------------------------------------ 照片聚焦
+// 照片不再用 DOM 弹层，而是把相框本身"拔"到镜头前（效果见 tree.js 的 focusPhoto）。
+// 好处是渲染循环完全不中断：树照常转、雪照常落，照片就悬在场景中央。
 
 function openPhoto(node) {
-  const src = tree.photoSource(node);
-  if (!src) return;
-  photoImg.src = src;
-  photoView.classList.add('on');
+  if (!node) return;
+  tree.focusPhoto(node);
   tree.setHovered(null);
 }
 
 function closePhoto() {
-  photoView.classList.remove('on');
-  photoImg.removeAttribute('src');
+  tree.unfocusPhoto();
 }
 
-photoView.addEventListener('click', closePhoto);
 window.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') closePhoto();
 });
@@ -706,6 +634,7 @@ const canvasEl = els.app.querySelector('canvas');
 attachPointerControls(canvasEl, rig, {
   onDoubleTap: () => switchMode(rig.mode === MODE.TREE ? MODE.SCATTER : MODE.TREE),
   onTap: (cx, cy) => {
+    if (tree.focusedPhoto) { closePhoto(); return; }
     const node = tree.pickAt(cx / window.innerWidth, cy / window.innerHeight);
     if (node) openPhoto(node);
   },
@@ -840,14 +769,14 @@ function frame(now) {
 
   // 捏合：指着相框就展开，空着就撒花
   if (out.pinched && !frame._wasPinched) {
-    const picked = out.hand ? tree.hovered : null;
-    if (picked) openPhoto(picked);
+    if (tree.focusedPhoto) closePhoto();
+    else if (out.hand && tree.hovered) openPhoto(tree.hovered);
     else fireBurst();
   }
   frame._wasPinched = out.pinched;
 
   // 手悬停在相框上时放大一点，作为"可点击"的反馈
-  if (out.hand && !photoView.classList.contains('on')) {
+  if (out.hand && !tree.focusedPhoto) {
     tree.setHovered(tree.pickAt(out.hand.x, out.hand.y));
   } else if (!out.hand) {
     tree.setHovered(null);
@@ -1047,9 +976,12 @@ const CONFIG = {
     follow: 5.5,           // 跟随刚度，越大越跟手越容易抖
 
     // --- 判向持续旋转（新交互） ---
-    steerEnter: 0.45,      // 手的横向偏移超过它 → 判定为「往这个方向转」
-    steerHold: 0.12,       // 方向要保持多久才生效（秒），防抖
-    steerSpeed: 0.62,      // 判定方向后的持续转速（弧度/秒 ≈ 35°/s）
+    steerEnter: 0.30,      // 手的横向偏移超过它 → 判定为「往这个方向转」（越低越果断）
+    steerHold: 0.06,       // 方向要保持多久才生效（秒）；手甩得快时会被速度直接抢判，不等这个时间
+    steerSpeed: 0.62,      // 基础持续转速（弧度/秒 ≈ 35°/s）
+    steerBoost: 0.9,       // 手速带来的额外倍率上限：最快 ≈ 1.9 倍速
+    steerRefSpeed: 1.4,    // 达到满加成所需的手速（画面宽度/秒）
+    steerKickSpeed: 1.2,   // 横向手速超过它，方向立刻生效，不等 steerHold
     centerStop: 0.18,      // 手回到中心 ±18% 内持续 centerStopTime 秒 → 停止转向
     centerStopTime: 0.8,
 
@@ -1328,6 +1260,9 @@ class Rig {
     this._cand = 0;
     this._candTime = 0;
     this._centerTime = 0;
+    this._lastHandX = null;
+    this.vx = 0;            // 手的横向速度（画面宽度/秒，平滑后）
+    this.speedMul = 1;      // 手速带来的转速倍率
 
     // 手机倾斜控制（js/gyro.js 驱动）
     this.gyroEnabled = false;
@@ -1392,6 +1327,15 @@ class Rig {
       const nx = (hand.x - 0.5) * 2;   // 手在画面横向的位置，-1 左 / +1 右
       const ny = (hand.y - 0.5) * 2;
 
+      // 横向手速：用来「抢判方向」和「加速旋转」
+      if (this._lastHandX !== null && dt > 0) {
+        const raw = (hand.x - this._lastHandX) / dt;
+        this.vx += (raw - this.vx) * 0.45; // 平滑，别被单帧抖动带飞
+      }
+      this._lastHandX = hand.x;
+      const speedAbs = Math.min(Math.abs(this.vx) / c.steerRefSpeed, 1);
+      this.speedMul = 1 + speedAbs * c.steerBoost;
+
       // ---------- 判向：只看"手在哪一侧"，不管手是否停住 ----------
       const candidate = nx > c.steerEnter ? 1 : nx < -c.steerEnter ? -1 : 0;
       if (candidate !== this._cand) {
@@ -1399,8 +1343,15 @@ class Rig {
         this._candTime = 0;
       }
       this._candTime += dt;
-      if (candidate !== 0 && this._candTime >= c.steerHold) {
-        this.spinDir = candidate; // 方向锁定，手移开也继续转
+      if (candidate !== 0) {
+        // 两种触发：① 稳定保持 steerHold；② 手甩得快（速度同向且够大）直接抢判。
+        // ② 是为了"果断"——用户明确往一侧摆的时候不该再等 60ms。
+        const kicked = this._candTime >= 2 * dt
+          && Math.abs(this.vx) > c.steerKickSpeed
+          && Math.sign(this.vx) === candidate;
+        if (this._candTime >= c.steerHold || kicked) {
+          this.spinDir = candidate; // 方向锁定，手移开也继续转
+        }
       }
 
       // ---------- 手回到中心并稳住 → 停止转向，回落自然自转 ----------
@@ -1418,6 +1369,10 @@ class Rig {
     } else {
       this.handActive = false;
       this._idleTime += dt;
+      this._lastHandX = null;
+      // 手离开后手速衰减，转速回落到基础值
+      this.vx *= Math.exp(-6 * dt);
+      this.speedMul += (1 - this.speedMul) * (1 - Math.exp(-4 * dt));
 
       if (this.gyroEnabled) {
         // 陀螺仪接管时：绝对角度跟随手机倾斜，且不自动旋转
@@ -1431,11 +1386,12 @@ class Rig {
       }
     }
 
-    // ---------- 持续旋转：方向锁定后就一直转，不依赖手是否还在 ----------
-    const speed = this.spinDir !== 0 ? c.steerSpeed : c.idleYawSpeed;
-    this.yawTarget += this.spinDir * speed * dt;
-    // spinDir 为 0 时上式加的是 0，所以自然自转单独补上
-    if (this.spinDir === 0) this.yawTarget += c.idleYawSpeed * dt;
+    // ---------- 持续旋转：方向锁定后就一直转，手甩得越快转得越快 ----------
+    if (this.spinDir !== 0) {
+      this.yawTarget += this.spinDir * c.steerSpeed * this.speedMul * dt;
+    } else {
+      this.yawTarget += c.idleYawSpeed * dt;
+    }
 
     return this._settle(dt, k);
   }
@@ -1487,6 +1443,32 @@ function radialTexture(inner, outer, size = 256) {
   g.addColorStop(1, 'rgba(0,0,0,0)');
   ctx.fillStyle = g;
   ctx.fillRect(0, 0, size, size);
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  return tex;
+}
+
+/** 聚焦时的描边光效：画一个带辉光的圆角方框 */
+function frameGlowTexture(size = 512) {
+  const canvas = document.createElement('canvas');
+  canvas.width = canvas.height = size;
+  const ctx = canvas.getContext('2d');
+  const inset = size * 0.1;
+  const r = size * 0.04;
+
+  ctx.strokeStyle = 'rgba(255, 214, 140, 0.95)';
+  ctx.lineWidth = size * 0.016;
+  ctx.shadowColor = 'rgba(255, 170, 70, 0.95)';
+  ctx.shadowBlur = size * 0.06;
+  ctx.beginPath();
+  if (typeof ctx.roundRect === 'function') {
+    ctx.roundRect(inset, inset, size - inset * 2, size - inset * 2, r);
+  } else {
+    ctx.rect(inset, inset, size - inset * 2, size - inset * 2);
+  }
+  ctx.stroke();
+  ctx.stroke(); // 描两遍，辉光更实
+
   const tex = new THREE.CanvasTexture(canvas);
   tex.colorSpace = THREE.SRGBColorSpace;
   return tex;
@@ -1556,6 +1538,9 @@ class HoloTree {
     this.photos = [];
     this.hovered = null;
 
+    // 照片聚焦（飞到镜头前）状态
+    this.focus = { node: null, t: 0, closing: false };
+
     this._initRenderer();
     this._initScene();
     this._initParticles();
@@ -1621,6 +1606,14 @@ class HoloTree {
     glow.scale.set(40, 40, 1);
     glow.position.set(0, this.cfg.particles.floorY - 2, 0);
     this.scene.add(glow);
+
+    // 聚焦照片时的背景压暗层：放在照片更远处，只压暗树和粒子，不压照片
+    this.dimPlane = new THREE.Mesh(
+      new THREE.PlaneGeometry(1, 1),
+      new THREE.MeshBasicMaterial({ color: 0x03060a, transparent: true, opacity: 0, depthWrite: false }),
+    );
+    this.dimPlane.visible = false;
+    this.scene.add(this.dimPlane);
   }
 
   _initParticles() {
@@ -1737,6 +1730,143 @@ class HoloTree {
     this.decor.add(group);
     this.photos.push(group);
     return group;
+  }
+
+  /**
+   * 照片聚焦：把相框从树里"拔"出来，飞到镜头前居中放大。
+   * 用的是 3D 对象本身，不是网页弹层 —— 所以树在背后照常转、雪照常落。
+   */
+  focusPhoto(node) {
+    if (!node) return;
+    if (this.focus.node === node) return;
+    if (this.focus.node) this._restoreFocus();
+
+    // 悬停放大过的话，先还原，否则会把 1.12 倍当成"原位姿"记下来
+    this.setHovered(null);
+
+    const home = {
+      parent: node.parent,
+      local: {
+        position: node.position.clone(),
+        quaternion: node.quaternion.clone(),
+        scale: node.scale.clone(),
+      },
+    };
+
+    this.scene.attach(node); // 保留世界位置地挪到场景根下，动画才不会打架
+    node.userData.focusHome = home;
+
+    if (!node.userData.focusGlow) {
+      const glow = new THREE.Mesh(
+        new THREE.PlaneGeometry(1.9, 1.9),
+        new THREE.MeshBasicMaterial({
+          map: frameGlowTexture(),
+          transparent: true,
+          opacity: 0,
+          depthWrite: false,
+          blending: THREE.AdditiveBlending,
+          toneMapped: false,
+        }),
+      );
+      glow.position.z = -0.06;
+      node.add(glow);
+      node.userData.focusGlow = glow;
+    }
+
+    this.focus.node = node;
+    this.focus.closing = false;
+    this.focus.t = Math.max(this.focus.t, 0.001);
+  }
+
+  unfocusPhoto() {
+    if (this.focus.node) this.focus.closing = true;
+  }
+
+  get focusedPhoto() {
+    return this.focus.node;
+  }
+
+  _restoreFocus() {
+    const f = this.focus;
+    const node = f.node;
+    if (!node) return;
+
+    const home = node.userData.focusHome;
+    if (home) {
+      home.parent.add(node);
+      node.position.copy(home.local.position);
+      node.quaternion.copy(home.local.quaternion);
+      node.scale.copy(home.local.scale);
+      node.userData.focusHome = null;
+    }
+    if (node.userData.focusGlow) node.userData.focusGlow.material.opacity = 0;
+
+    f.node = null;
+    f.t = 0;
+    f.closing = false;
+  }
+
+  _updateFocus(dt) {
+    const f = this.focus;
+
+    if (!f.node) {
+      if (this.dimPlane.visible) {
+        this.dimPlane.material.opacity *= Math.exp(-8 * dt);
+        this.dimPlane.visible = this.dimPlane.material.opacity > 0.005;
+      }
+      return;
+    }
+
+    const node = f.node;
+    const cam = this.camera;
+    const target = f.closing ? 0 : 1;
+    f.t += (target - f.t) * (1 - Math.exp(-7 * dt));
+
+    const dir = new THREE.Vector3(0, 0, -1).applyQuaternion(cam.quaternion);
+    const dist = 4.6;
+    const focusPos = cam.position.clone().addScaledVector(dir, dist);
+
+    // 让照片高约占画面 62%，手机竖屏也不会顶出边界
+    const visH = 2 * dist * Math.tan((cam.fov * Math.PI / 180) / 2);
+    const targetScale = (visH * 0.62) / 1.62;
+
+    // 原位姿要每帧重算：树一直在转，旧的世界坐标会飘
+    const home = node.userData.focusHome;
+    let homePos;
+    let homeQuat;
+    let homeScale;
+    if (home) {
+      home.parent.updateMatrixWorld();
+      homePos = home.local.position.clone().applyMatrix4(home.parent.matrixWorld);
+      homeQuat = home.parent
+        .getWorldQuaternion(new THREE.Quaternion())
+        .multiply(home.local.quaternion);
+      homeScale = home.local.scale.x;
+    } else {
+      homePos = focusPos.clone();
+      homeQuat = cam.quaternion.clone();
+      homeScale = targetScale;
+    }
+
+    const t = f.t;
+    node.position.lerpVectors(homePos, focusPos, t);
+    node.quaternion.slerpQuaternions(homeQuat, cam.quaternion, t);
+    node.scale.setScalar(homeScale + (targetScale - homeScale) * t);
+
+    if (node.userData.focusGlow) {
+      node.userData.focusGlow.material.opacity = 0.9 * t * (0.85 + 0.15 * Math.sin(this.time * 2.4));
+    }
+
+    // 背景压暗层：比照片更远 28%，只压暗后面的场景
+    const dimDist = dist * 1.28;
+    const dimH = 2 * dimDist * Math.tan((cam.fov * Math.PI / 180) / 2);
+    this.dimPlane.position.copy(cam.position).addScaledVector(dir, dimDist);
+    this.dimPlane.quaternion.copy(cam.quaternion);
+    this.dimPlane.scale.set(dimH * 1.7, dimH * 1.1, 1);
+    this.dimPlane.visible = t > 0.01;
+    this.dimPlane.material.opacity = 0.5 * t;
+
+    if (f.closing && f.t < 0.02) this._restoreFocus();
   }
 
   /**
@@ -1929,6 +2059,7 @@ class HoloTree {
 
     this._updateSnow(dt);
     this._updateBursts(dt);
+    this._updateFocus(dt);
 
     this.composer.render();
   }
