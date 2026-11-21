@@ -80,6 +80,7 @@ const els = {
   camPanel: $('#cam-panel'),
   file: $('#file-input'),
   replay: $('#replay-btn'),
+  debugBtn: $('#debug-btn'),
   toast: $('#toast'),
 };
 
@@ -243,6 +244,11 @@ let handSeenAt = 0;      // 最近一次拿到手的时刻
 let fps = 0;
 let debugOn = false;
 
+function setDebug(on) {
+  debugOn = on;
+  els.debug.classList.toggle('on', on);
+}
+
 let lastHandTrackAt = 0;
 
 function onHand(landmarks) {
@@ -325,6 +331,12 @@ attachPointerControls(canvasEl, rig, {
   },
 });
 
+// 手机没有 D 键：右上角给一个「调试」按钮，点开就是同一块面板
+if (isTouchDevice && els.debugBtn) {
+  els.debugBtn.hidden = false;
+  els.debugBtn.addEventListener('click', () => setDebug(!debugOn));
+}
+
 canvasEl.addEventListener('wheel', (e) => {
   e.preventDefault();
   rig.touch();
@@ -336,10 +348,7 @@ canvasEl.addEventListener('wheel', (e) => {
 window.addEventListener('keydown', (e) => {
   const key = e.key.toLowerCase();
   if (key === 'h') document.body.classList.toggle('ui-hidden');
-  if (key === 'd') {
-    debugOn = !debugOn;
-    els.debug.classList.toggle('on', debugOn);
-  }
+  if (key === 'd') setDebug(!debugOn);
   if (key === '1') switchMode(MODE.TREE);
   if (key === '2') switchMode(MODE.SCATTER);
   if (key === ' ') {

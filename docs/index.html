@@ -595,6 +595,9 @@ body.ui-hidden #debug { opacity: 0; pointer-events: none; }
     <button class="btn" id="replay-btn" type="button" title="重播开场动画（电脑上按 R 也可以）">
       <span>↻</span> 重播
     </button>
+    <button class="btn btn-ghost" id="debug-btn" type="button" title="调试信息（电脑上按 D）" hidden>
+      <span>◎</span> 调试
+    </button>
     <div class="hint-mini">按 H 隐藏界面 · 空格撒花 · R 重播开场</div>
   </div>
 
@@ -632,7 +635,7 @@ body.ui-hidden #debug { opacity: 0; pointer-events: none; }
 
   <div id="toast"></div>
 
-  <script>window.__HOLO_NO_VENDOR__ = true; window.__HOLO_BUILD__ = "2026-11-21T22:29:18.159Z";</script>
+  <script>window.__HOLO_NO_VENDOR__ = true; window.__HOLO_BUILD__ = "2026-11-21T22:53:47.248Z";</script>
 <script>
 /* 由 tools/bundle.mjs 生成 —— 不要手改，改源码后重新构建 */
 (function () {
@@ -727,6 +730,7 @@ const els = {
   camPanel: $('#cam-panel'),
   file: $('#file-input'),
   replay: $('#replay-btn'),
+  debugBtn: $('#debug-btn'),
   toast: $('#toast'),
 };
 
@@ -890,6 +894,11 @@ let handSeenAt = 0;      // 最近一次拿到手的时刻
 let fps = 0;
 let debugOn = false;
 
+function setDebug(on) {
+  debugOn = on;
+  els.debug.classList.toggle('on', on);
+}
+
 let lastHandTrackAt = 0;
 
 function onHand(landmarks) {
@@ -972,6 +981,12 @@ attachPointerControls(canvasEl, rig, {
   },
 });
 
+// 手机没有 D 键：右上角给一个「调试」按钮，点开就是同一块面板
+if (isTouchDevice && els.debugBtn) {
+  els.debugBtn.hidden = false;
+  els.debugBtn.addEventListener('click', () => setDebug(!debugOn));
+}
+
 canvasEl.addEventListener('wheel', (e) => {
   e.preventDefault();
   rig.touch();
@@ -983,10 +998,7 @@ canvasEl.addEventListener('wheel', (e) => {
 window.addEventListener('keydown', (e) => {
   const key = e.key.toLowerCase();
   if (key === 'h') document.body.classList.toggle('ui-hidden');
-  if (key === 'd') {
-    debugOn = !debugOn;
-    els.debug.classList.toggle('on', debugOn);
-  }
+  if (key === 'd') setDebug(!debugOn);
   if (key === '1') switchMode(MODE.TREE);
   if (key === '2') switchMode(MODE.SCATTER);
   if (key === ' ') {
