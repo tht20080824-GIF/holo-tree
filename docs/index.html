@@ -559,7 +559,7 @@ body.ui-hidden #debug { opacity: 0; pointer-events: none; }
 
   <div id="toast"></div>
 
-  <script>window.__HOLO_NO_VENDOR__ = true; window.__HOLO_BUILD__ = "2026-11-21T19:04:35.273Z";</script>
+  <script>window.__HOLO_NO_VENDOR__ = true; window.__HOLO_BUILD__ = "2026-11-21T19:16:08.965Z";</script>
 <script>
 /* 由 tools/bundle.mjs 生成 —— 不要手改，改源码后重新构建 */
 (function () {
@@ -2878,7 +2878,7 @@ const { RenderPass } = __require("vendor/three-addons/postprocessing/RenderPass.
 const { UnrealBloomPass } = __require("vendor/three-addons/postprocessing/UnrealBloomPass.js");
 const { OutputPass } = __require("vendor/three-addons/postprocessing/OutputPass.js");
 
-const { INTRO_DURATION, easeInOutCubic, easeOutCubic, clamp01, progress, burstOffset, starPulse, frameCamera, letterProgress, TEXT_LETTER_DELAY } = __require("js/intro-math.js");
+const { INTRO_DURATION, easeInOutCubic, easeOutCubic, clamp01, progress, burstOffset, starPulse, frameCamera, fitDustRadius, dustTiltFor, letterProgress, TEXT_LETTER_DELAY } = __require("js/intro-math.js");
 
 const T = {
   gatherEnd: 3.2,
@@ -2898,6 +2898,7 @@ const VERT = /* glsl */ `
   attribute vec3 aColor;
   attribute float aSize;
   attribute float aSeed;
+  attribute float aRim;
 
   uniform float uK;
   uniform float uSizeScale;
@@ -2913,12 +2914,13 @@ const VERT = /* glsl */ `
     vec4 mv = modelViewMatrix * vec4(position, 1.0);
     gl_Position = projectionMatrix * mv;
 
-    float s = aSize * 0.0086 * uK / max(0.06, -mv.z);
+    // 外沿一圈更亮更粗：参考画面里"环边"是清楚的一道亮边，中间是散的
+    float s = aSize * (1.0 + 0.7 * aRim) * 0.0086 * uK / max(0.06, -mv.z);
     gl_PointSize = clamp(s, 1.0, 110.0) * uSizeScale;
 
     vec3 gold = vec3(1.0, 0.79, 0.44);
     float tw = 0.88 + 0.12 * sin(uTime * 2.7 + aSeed * 43.0);
-    vColor = mix(gold, aColor, uMix) * uBright * tw;
+    vColor = mix(gold, aColor, uMix) * uBright * tw * (0.82 + 0.42 * aRim);
     vAlpha = uAlpha;
   }
 `;
@@ -2967,9 +2969,10 @@ class IntroSequence {
     this.treeX = new Float32Array(n);
     this.treeY = new Float32Array(n);
     this.treeZ = new Float32Array(n);
-    this.dustX = new Float32Array(n);   // 单位矢量 × 半径（预旋转好的基准）
+    this.dustX = new Float32Array(n);   // 单位方向（cos/sin），半径另存
     this.dustZ = new Float32Array(n);
-    this.dustY = new Float32Array(n);
+    this.dustU = new Float32Array(n);   // 半径系数 0.70~1.00（环带）
+    this.dustY = new Float32Array(n);   // 盘的垂直厚度
     this.bDir = new Float32Array(n * 3);
     this.bScale = new Float32Array(n);
     this.seed = new Float32Array(n);
@@ -2979,6 +2982,7 @@ class IntroSequence {
     const colors = new Float32Array(n * 3);
     const sizes = new Float32Array(n);
     const seeds = new Float32Array(n);
+    const rims = new Float32Array(n);
 
     const palette = [
       { c: [0.12, 0.55, 0.34], w: 0.34 },
@@ -3020,12 +3024,14 @@ class IntroSequence {
       this.treeY[i] = floorY + yf * height + (Math.random() - 0.5) * 0.6;
       this.hf[i] = yf;
 
-      // --- 星尘：预存「单位矢量 × 半径」，每帧只做一次全局旋转 ---
+      // --- 星尘：预存「单位方向 + 环带系数」，每帧只做乘加 ---
       const dAng = Math.random() * Math.PI * 2;
-      const dR = baseRadius * (1.9 + Math.pow(Math.random(), 0.65) * 2.4);
-      this.dustX[i] = Math.cos(dAng) * dR;
-      this.dustZ[i] = Math.sin(dAng) * dR;
-      this.dustY[i] = (Math.random() - 0.5) * height * 0.09;
+      this.dustX[i] = Math.cos(dAng);
+      this.dustZ[i] = Math.sin(dAng);
+      // 环带 0.70~1.00（外沿用 pow 压低概率，中间自然变透）
+      this.dustU[i] = 0.7 + Math.pow(Math.random(), 0.8) * 0.3;
+      this.dustY[i] = (Math.random() - 0.5) * height * 0.055 * 2;
+      rims[i] = Math.min(1, Math.max(0, (this.dustU[i] - 0.72) / 0.26));
 
       // --- 爆散方向（略偏镜头） ---
       const a = Math.random() * Math.PI * 2;
@@ -3048,9 +3054,9 @@ class IntroSequence {
 
       sizes[i] = 0.82 + Math.random() * 1.25;
 
-      positions[i3] = this.dustX[i];
+      positions[i3] = this.dustX[i] * this.dustU[i] * 9;
       positions[i3 + 1] = this.dustY[i];
-      positions[i3 + 2] = this.dustZ[i];
+      positions[i3 + 2] = this.dustZ[i] * this.dustU[i] * 9;
     }
 
     const geo = new THREE.BufferGeometry();
@@ -3058,6 +3064,7 @@ class IntroSequence {
     geo.setAttribute('aColor', new THREE.BufferAttribute(colors, 3));
     geo.setAttribute('aSize', new THREE.BufferAttribute(sizes, 1));
     geo.setAttribute('aSeed', new THREE.BufferAttribute(seeds, 1));
+    geo.setAttribute('aRim', new THREE.BufferAttribute(rims, 1));
     geo.boundingSphere = new THREE.Sphere(new THREE.Vector3(), 120);
 
     this.uniforms = {
@@ -3099,6 +3106,7 @@ class IntroSequence {
     const colors = new Float32Array(total * 3);
     const sizes = new Float32Array(total).fill(2.2);
     const seeds = new Float32Array(total);
+    const rims = new Float32Array(total);
     const dir = new Float32Array(total * 3);
 
     for (let i = 0; i < total; i++) {
@@ -3121,6 +3129,7 @@ class IntroSequence {
     geo.setAttribute('aColor', new THREE.BufferAttribute(colors, 3));
     geo.setAttribute('aSize', new THREE.BufferAttribute(sizes, 1));
     geo.setAttribute('aSeed', new THREE.BufferAttribute(seeds, 1));
+    geo.setAttribute('aRim', new THREE.BufferAttribute(rims, 1));
     geo.boundingSphere = new THREE.Sphere(new THREE.Vector3(), 200);
 
     const mat = new THREE.ShaderMaterial({
@@ -3168,6 +3177,26 @@ class IntroSequence {
     this.camera.updateProjectionMatrix();
     this.baseDistance = cam.distance;
     this.baseTargetY = cam.targetY;
+
+    // 星尘盘半径按画幅反算：竖屏手机上环最多只能和树底一样宽，
+    // 横屏笔记本上可以张到 2.6 倍树底。写死半径必然有一头越界。
+    this.dustThickness = height * 0.055;
+    this.dustTilt = dustTiltFor(aspect);
+    const rFit = fitDustRadius(
+      { distance: cam.distance, targetY: cam.targetY, tanV: cam.tanV, aspect },
+      {
+        tilt: this.dustTilt,
+        thickness: this.dustThickness,
+        marginX: 0.92,
+        marginTop: 0.9,
+        marginBottom: 0.96,
+        cap: baseRadius * 2.6,
+      },
+    );
+    this.dustR0 = rFit;
+    this.dustR1 = Math.min(rFit * 0.62, baseRadius * 1.45);
+    this.dustCos = Math.cos(this.dustTilt);
+    this.dustSin = Math.sin(this.dustTilt);
   }
 
   _buildComposer() {
@@ -3236,12 +3265,21 @@ class IntroSequence {
     if (t < T.gatherEnd) {
       // A. 星尘汇聚：收缩 + 自转，纯加减乘，无逐粒子三角函数
       const p = t / T.gatherEnd;
-      const shrink = 1 - 0.42 * easeInOutCubic(p);
+      const cur = this.dustR0 + (this.dustR1 - this.dustR0) * easeInOutCubic(p);
+      const ct = this.dustCos;
+      const st = this.dustSin;
+      const thickK = 1 - 0.35 * p;
       for (let i = 0; i < n; i++) {
         const i3 = i * 3;
-        P[i3] = (this.dustX[i] * cs - this.dustZ[i] * sn) * shrink;
-        P[i3 + 1] = this.dustY[i] * (1 - 0.35 * p);
-        P[i3 + 2] = (this.dustX[i] * sn + this.dustZ[i] * cs) * shrink;
+        const u = this.dustU[i] * cur;
+        const x0 = this.dustX[i] * u;
+        const z0 = this.dustZ[i] * u;
+        const x = x0 * cs - z0 * sn;
+        const z = x0 * sn + z0 * cs;
+        const y0 = this.dustY[i] * thickK;
+        P[i3] = x;
+        P[i3 + 1] = y0 * ct - z * st;
+        P[i3 + 2] = y0 * st + z * ct;
       }
       mix = 0;
       bright = 0.9 + 0.3 * p;
@@ -3251,22 +3289,30 @@ class IntroSequence {
       const extra = (1 - easeOutCubic(p)) * Math.PI * 2;
       const ce = Math.cos(extra);
       const se = Math.sin(extra);
-      const shrink = 0.58;
+      const cur = this.dustR1;
+      const ct = this.dustCos;
+      const st = this.dustSin;
 
       for (let i = 0; i < n; i++) {
         const i3 = i * 3;
         const delay = this.hf[i] * 0.55;
         const b = easeInOutCubic(clamp01((p - delay) / (1 - 0.55)));
 
-        const dx = (this.dustX[i] * cs - this.dustZ[i] * sn) * shrink;
-        const dz = (this.dustX[i] * sn + this.dustZ[i] * cs) * shrink;
+        const u = this.dustU[i] * cur;
+        const x0 = this.dustX[i] * u;
+        const z0 = this.dustZ[i] * u;
+        const dx = x0 * cs - z0 * sn;
+        const dz0 = x0 * sn + z0 * cs;
+        const y0 = this.dustY[i];
+        const dy = y0 * ct - dz0 * st;
+        const dz = y0 * st + dz0 * ct;
 
-        // 先在水平面上多绕一点，再落位
+        // 先在倾斜盘面上多绕一点，再落位
         const sx = dx * ce - dz * se;
         const sz = dx * se + dz * ce;
 
         P[i3] = sx + (this.treeX[i] - sx) * b;
-        P[i3 + 1] = this.dustY[i] + (this.treeY[i] - this.dustY[i]) * b;
+        P[i3 + 1] = dy + (this.treeY[i] - dy) * b;
         P[i3 + 2] = sz + (this.treeZ[i] - sz) * b;
       }
       mix = easeOutCubic(clamp01((p - 0.55) / 0.45));
@@ -58576,20 +58622,35 @@ function projectToNdc(p, camera) {
 
 // ---------------------------------------------------------------- 星尘盘
 
-/** 星尘盘倾斜（弧度）：不倾斜的话正对镜头会看成一条线 */
-const DUST_TILT = (17 * Math.PI) / 180;
+/**
+ * 星尘盘倾斜角（弧度）。
+ *
+ * 盘面平躺在 y≈0 时，相机几乎和盘面等高，投影出来是一条横贯屏幕的"煎饼"。
+ * 26° 对应画面上椭圆短/长轴 ≈ 0.44（sin 26°），和参考画面一致。
+ */
+const DUST_TILT = (26 * Math.PI) / 180;
 
 /**
- * 星尘盘半径随进度收缩到 1.5×树底半径。
- * 起点不能写死 6：树缩放后可能比 6 小，会变成"越聚越散"。
- * 用 2.2× 树底半径作起点，保证任何树尺寸下都一定是收缩。
+ * 按画幅选倾斜角：让投影出来的椭圆「短/长轴」稳定在 0.33 左右。
+ *
+ * 同样是 26° 的盘，竖屏手机上会被压成 0.2 的扁椭圆（因为 NDC 横向要除以 aspect），
+ * 所以窄屏要看得更"俯"一点、宽屏可以接近躺平。0.33 取自参考画面的实测值。
  */
-function dustRadius(p, baseRadius) {
-  const from = Math.max(6, baseRadius * 2.2);
-  const to = baseRadius * 1.5;
-  const k = Math.min(1, (to / Math.max(from, 1e-6)));
-  // from → to 的插值（from 更大时是收缩）
-  return from + (to - from) * easeInOutCubic(clamp01(p));
+function dustTiltFor(aspect, { ratio = 0.33, minDeg = 18, maxDeg = 45 } = {}) {
+  const s = Math.min(Math.max(ratio / Math.max(aspect, 1e-3), 1e-3), 1);
+  const deg = (Math.asin(s) * 180) / Math.PI;
+  const clamped = Math.min(Math.max(deg, minDeg), maxDeg);
+  return (clamped * Math.PI) / 180;
+}
+
+/**
+ * 盘上一点 → 世界坐标：先绕 Y 自转（x/z），再绕 X 倾斜。
+ * 顺序不能反：先倾斜再自转，盘子会像陀螺一样左右晃。
+ */
+function tiltDisc(x, y0, z, tilt = DUST_TILT) {
+  const ct = Math.cos(tilt);
+  const st = Math.sin(tilt);
+  return { x, y: y0 * ct - z * st, z: y0 * st + z * ct };
 }
 
 /** 星尘盘转速：随进度平方加快 */
@@ -58599,21 +58660,82 @@ function dustSpin(p, base = 0.6) {
 }
 
 /**
- * 在倾斜盘上取一点（带垂直厚度，避免看成一条线）。
+ * 盘面在 NDC 里占多大（采样一圈，取最外侧）。
  *
- * yJitter 必须由调用方预存 —— 这里如果用 Math.random()，
- * 每帧都会重新随机，星尘会逐帧乱跳（这个坑踩过）。
+ * 单看横向不够：近侧的盘边离镜头最近，透视会把它甩到画面下方，
+ * 之前环"看着大得离谱"就是这个原因 —— 横向和纵向都得算。
  */
-function dustPoint(angle, radius, thickness = 0.5, yJitter = 0) {
-  const x = Math.cos(angle) * radius;
-  const z0 = Math.sin(angle) * radius;
-  const y0 = yJitter * thickness;
-  // 绕 X 轴倾斜 17°
-  return {
-    x,
-    y: y0 * Math.cos(DUST_TILT) - z0 * Math.sin(DUST_TILT),
-    z: y0 * Math.sin(DUST_TILT) + z0 * Math.cos(DUST_TILT),
+function dustRingExtent(radius, cam, {
+  tilt = DUST_TILT,
+  thickness = 0,
+  samples = 96,
+} = {}) {
+  const ct = Math.cos(tilt);
+  const st = Math.sin(tilt);
+  const { distance, targetY, tanV, aspect } = cam;
+
+  let maxX = 0;
+  let minY = Infinity;
+  let maxY = -Infinity;
+
+  for (let i = 0; i < samples; i++) {
+    const a = (i / samples) * Math.PI * 2;
+    const x = Math.cos(a) * radius;
+    const z0 = Math.sin(a) * radius;
+
+    for (const y0 of thickness > 0 ? [thickness, -thickness] : [0]) {
+      const y = y0 * ct - z0 * st;
+      const z = y0 * st + z0 * ct;
+      const dz = distance - z;
+      if (dz <= 1e-3) {          // 越到镜头后面了，算越界
+        maxX = Infinity;
+        minY = -Infinity;
+        continue;
+      }
+      const ndcX = x / (dz * tanV * aspect);
+      const ndcY = (y - targetY) / (dz * tanV);
+      if (Math.abs(ndcX) > maxX) maxX = Math.abs(ndcX);
+      if (ndcY < minY) minY = ndcY;
+      if (ndcY > maxY) maxY = ndcY;
+    }
+  }
+  return { maxX, minY, maxY };
+}
+
+/**
+ * 反算「整圈都留在画面里」的星尘盘半径。
+ *
+ * 为什么不在 config 里写死半径：同一个世界半径，横屏笔记本上只占半屏，
+ * 竖屏手机上会超出 4.5 倍。按画幅反算才能两头都好看。
+ *
+ * @returns 满足 margin 的最大半径（世界单位）；cap 用来防止横屏时环过大。
+ */
+function fitDustRadius(cam, {
+  tilt = DUST_TILT,
+  thickness = 0,
+  marginX = 0.92,
+  marginTop = 0.9,
+  marginBottom = 0.96,
+  cap = Infinity,
+} = {}) {
+  const fits = (r) => {
+    const e = dustRingExtent(r, cam, { tilt, thickness });
+    if (!Number.isFinite(e.maxX)) return false;
+    return e.maxX <= marginX && e.maxY <= marginTop && e.minY >= -marginBottom;
   };
+
+  const hardCap = Math.min(cap, cam.distance * 0.92);
+  if (fits(hardCap)) return hardCap;
+
+  // 越界程度随半径单调上升，二分找边界
+  let lo = 0;
+  let hi = hardCap;
+  for (let i = 0; i < 40; i++) {
+    const mid = (lo + hi) / 2;
+    if (fits(mid)) lo = mid;
+    else hi = mid;
+  }
+  return lo;
 }
 
 // ---------------------------------------------------------------- 文字
@@ -58633,9 +58755,11 @@ __exports["starPulse"] = starPulse;
 __exports["freezeBrightness"] = freezeBrightness;
 __exports["frameCamera"] = frameCamera;
 __exports["projectToNdc"] = projectToNdc;
-__exports["dustRadius"] = dustRadius;
+__exports["dustTiltFor"] = dustTiltFor;
+__exports["tiltDisc"] = tiltDisc;
 __exports["dustSpin"] = dustSpin;
-__exports["dustPoint"] = dustPoint;
+__exports["dustRingExtent"] = dustRingExtent;
+__exports["fitDustRadius"] = fitDustRadius;
 __exports["letterProgress"] = letterProgress;
 __exports["INTRO_DURATION"] = INTRO_DURATION;
 __exports["easeOutCubic"] = easeOutCubic;

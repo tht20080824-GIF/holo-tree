@@ -98,20 +98,35 @@ export function projectToNdc(p, camera) {
 
 // ---------------------------------------------------------------- 星尘盘
 
-/** 星尘盘倾斜（弧度）：不倾斜的话正对镜头会看成一条线 */
-export const DUST_TILT = (17 * Math.PI) / 180;
+/**
+ * 星尘盘倾斜角（弧度）。
+ *
+ * 盘面平躺在 y≈0 时，相机几乎和盘面等高，投影出来是一条横贯屏幕的"煎饼"。
+ * 26° 对应画面上椭圆短/长轴 ≈ 0.44（sin 26°），和参考画面一致。
+ */
+export const DUST_TILT = (26 * Math.PI) / 180;
 
 /**
- * 星尘盘半径随进度收缩到 1.5×树底半径。
- * 起点不能写死 6：树缩放后可能比 6 小，会变成"越聚越散"。
- * 用 2.2× 树底半径作起点，保证任何树尺寸下都一定是收缩。
+ * 按画幅选倾斜角：让投影出来的椭圆「短/长轴」稳定在 0.33 左右。
+ *
+ * 同样是 26° 的盘，竖屏手机上会被压成 0.2 的扁椭圆（因为 NDC 横向要除以 aspect），
+ * 所以窄屏要看得更"俯"一点、宽屏可以接近躺平。0.33 取自参考画面的实测值。
  */
-export function dustRadius(p, baseRadius) {
-  const from = Math.max(6, baseRadius * 2.2);
-  const to = baseRadius * 1.5;
-  const k = Math.min(1, (to / Math.max(from, 1e-6)));
-  // from → to 的插值（from 更大时是收缩）
-  return from + (to - from) * easeInOutCubic(clamp01(p));
+export function dustTiltFor(aspect, { ratio = 0.33, minDeg = 18, maxDeg = 45 } = {}) {
+  const s = Math.min(Math.max(ratio / Math.max(aspect, 1e-3), 1e-3), 1);
+  const deg = (Math.asin(s) * 180) / Math.PI;
+  const clamped = Math.min(Math.max(deg, minDeg), maxDeg);
+  return (clamped * Math.PI) / 180;
+}
+
+/**
+ * 盘上一点 → 世界坐标：先绕 Y 自转（x/z），再绕 X 倾斜。
+ * 顺序不能反：先倾斜再自转，盘子会像陀螺一样左右晃。
+ */
+export function tiltDisc(x, y0, z, tilt = DUST_TILT) {
+  const ct = Math.cos(tilt);
+  const st = Math.sin(tilt);
+  return { x, y: y0 * ct - z * st, z: y0 * st + z * ct };
 }
 
 /** 星尘盘转速：随进度平方加快 */
@@ -121,21 +136,82 @@ export function dustSpin(p, base = 0.6) {
 }
 
 /**
- * 在倾斜盘上取一点（带垂直厚度，避免看成一条线）。
+ * 盘面在 NDC 里占多大（采样一圈，取最外侧）。
  *
- * yJitter 必须由调用方预存 —— 这里如果用 Math.random()，
- * 每帧都会重新随机，星尘会逐帧乱跳（这个坑踩过）。
+ * 单看横向不够：近侧的盘边离镜头最近，透视会把它甩到画面下方，
+ * 之前环"看着大得离谱"就是这个原因 —— 横向和纵向都得算。
  */
-export function dustPoint(angle, radius, thickness = 0.5, yJitter = 0) {
-  const x = Math.cos(angle) * radius;
-  const z0 = Math.sin(angle) * radius;
-  const y0 = yJitter * thickness;
-  // 绕 X 轴倾斜 17°
-  return {
-    x,
-    y: y0 * Math.cos(DUST_TILT) - z0 * Math.sin(DUST_TILT),
-    z: y0 * Math.sin(DUST_TILT) + z0 * Math.cos(DUST_TILT),
+export function dustRingExtent(radius, cam, {
+  tilt = DUST_TILT,
+  thickness = 0,
+  samples = 96,
+} = {}) {
+  const ct = Math.cos(tilt);
+  const st = Math.sin(tilt);
+  const { distance, targetY, tanV, aspect } = cam;
+
+  let maxX = 0;
+  let minY = Infinity;
+  let maxY = -Infinity;
+
+  for (let i = 0; i < samples; i++) {
+    const a = (i / samples) * Math.PI * 2;
+    const x = Math.cos(a) * radius;
+    const z0 = Math.sin(a) * radius;
+
+    for (const y0 of thickness > 0 ? [thickness, -thickness] : [0]) {
+      const y = y0 * ct - z0 * st;
+      const z = y0 * st + z0 * ct;
+      const dz = distance - z;
+      if (dz <= 1e-3) {          // 越到镜头后面了，算越界
+        maxX = Infinity;
+        minY = -Infinity;
+        continue;
+      }
+      const ndcX = x / (dz * tanV * aspect);
+      const ndcY = (y - targetY) / (dz * tanV);
+      if (Math.abs(ndcX) > maxX) maxX = Math.abs(ndcX);
+      if (ndcY < minY) minY = ndcY;
+      if (ndcY > maxY) maxY = ndcY;
+    }
+  }
+  return { maxX, minY, maxY };
+}
+
+/**
+ * 反算「整圈都留在画面里」的星尘盘半径。
+ *
+ * 为什么不在 config 里写死半径：同一个世界半径，横屏笔记本上只占半屏，
+ * 竖屏手机上会超出 4.5 倍。按画幅反算才能两头都好看。
+ *
+ * @returns 满足 margin 的最大半径（世界单位）；cap 用来防止横屏时环过大。
+ */
+export function fitDustRadius(cam, {
+  tilt = DUST_TILT,
+  thickness = 0,
+  marginX = 0.92,
+  marginTop = 0.9,
+  marginBottom = 0.96,
+  cap = Infinity,
+} = {}) {
+  const fits = (r) => {
+    const e = dustRingExtent(r, cam, { tilt, thickness });
+    if (!Number.isFinite(e.maxX)) return false;
+    return e.maxX <= marginX && e.maxY <= marginTop && e.minY >= -marginBottom;
   };
+
+  const hardCap = Math.min(cap, cam.distance * 0.92);
+  if (fits(hardCap)) return hardCap;
+
+  // 越界程度随半径单调上升，二分找边界
+  let lo = 0;
+  let hi = hardCap;
+  for (let i = 0; i < 40; i++) {
+    const mid = (lo + hi) / 2;
+    if (fits(mid)) lo = mid;
+    else hi = mid;
+  }
+  return lo;
 }
 
 // ---------------------------------------------------------------- 文字

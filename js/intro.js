@@ -28,6 +28,8 @@ import {
   burstOffset,
   starPulse,
   frameCamera,
+  fitDustRadius,
+  dustTiltFor,
   letterProgress,
   TEXT_LETTER_DELAY,
 } from './intro-math.js';
@@ -50,6 +52,7 @@ const VERT = /* glsl */ `
   attribute vec3 aColor;
   attribute float aSize;
   attribute float aSeed;
+  attribute float aRim;
 
   uniform float uK;
   uniform float uSizeScale;
@@ -65,12 +68,13 @@ const VERT = /* glsl */ `
     vec4 mv = modelViewMatrix * vec4(position, 1.0);
     gl_Position = projectionMatrix * mv;
 
-    float s = aSize * 0.0086 * uK / max(0.06, -mv.z);
+    // 外沿一圈更亮更粗：参考画面里"环边"是清楚的一道亮边，中间是散的
+    float s = aSize * (1.0 + 0.7 * aRim) * 0.0086 * uK / max(0.06, -mv.z);
     gl_PointSize = clamp(s, 1.0, 110.0) * uSizeScale;
 
     vec3 gold = vec3(1.0, 0.79, 0.44);
     float tw = 0.88 + 0.12 * sin(uTime * 2.7 + aSeed * 43.0);
-    vColor = mix(gold, aColor, uMix) * uBright * tw;
+    vColor = mix(gold, aColor, uMix) * uBright * tw * (0.82 + 0.42 * aRim);
     vAlpha = uAlpha;
   }
 `;
@@ -119,9 +123,10 @@ export class IntroSequence {
     this.treeX = new Float32Array(n);
     this.treeY = new Float32Array(n);
     this.treeZ = new Float32Array(n);
-    this.dustX = new Float32Array(n);   // 单位矢量 × 半径（预旋转好的基准）
+    this.dustX = new Float32Array(n);   // 单位方向（cos/sin），半径另存
     this.dustZ = new Float32Array(n);
-    this.dustY = new Float32Array(n);
+    this.dustU = new Float32Array(n);   // 半径系数 0.70~1.00（环带）
+    this.dustY = new Float32Array(n);   // 盘的垂直厚度
     this.bDir = new Float32Array(n * 3);
     this.bScale = new Float32Array(n);
     this.seed = new Float32Array(n);
@@ -131,6 +136,7 @@ export class IntroSequence {
     const colors = new Float32Array(n * 3);
     const sizes = new Float32Array(n);
     const seeds = new Float32Array(n);
+    const rims = new Float32Array(n);
 
     const palette = [
       { c: [0.12, 0.55, 0.34], w: 0.34 },
@@ -172,12 +178,14 @@ export class IntroSequence {
       this.treeY[i] = floorY + yf * height + (Math.random() - 0.5) * 0.6;
       this.hf[i] = yf;
 
-      // --- 星尘：预存「单位矢量 × 半径」，每帧只做一次全局旋转 ---
+      // --- 星尘：预存「单位方向 + 环带系数」，每帧只做乘加 ---
       const dAng = Math.random() * Math.PI * 2;
-      const dR = baseRadius * (1.9 + Math.pow(Math.random(), 0.65) * 2.4);
-      this.dustX[i] = Math.cos(dAng) * dR;
-      this.dustZ[i] = Math.sin(dAng) * dR;
-      this.dustY[i] = (Math.random() - 0.5) * height * 0.09;
+      this.dustX[i] = Math.cos(dAng);
+      this.dustZ[i] = Math.sin(dAng);
+      // 环带 0.70~1.00（外沿用 pow 压低概率，中间自然变透）
+      this.dustU[i] = 0.7 + Math.pow(Math.random(), 0.8) * 0.3;
+      this.dustY[i] = (Math.random() - 0.5) * height * 0.055 * 2;
+      rims[i] = Math.min(1, Math.max(0, (this.dustU[i] - 0.72) / 0.26));
 
       // --- 爆散方向（略偏镜头） ---
       const a = Math.random() * Math.PI * 2;
@@ -200,9 +208,9 @@ export class IntroSequence {
 
       sizes[i] = 0.82 + Math.random() * 1.25;
 
-      positions[i3] = this.dustX[i];
+      positions[i3] = this.dustX[i] * this.dustU[i] * 9;
       positions[i3 + 1] = this.dustY[i];
-      positions[i3 + 2] = this.dustZ[i];
+      positions[i3 + 2] = this.dustZ[i] * this.dustU[i] * 9;
     }
 
     const geo = new THREE.BufferGeometry();
@@ -210,6 +218,7 @@ export class IntroSequence {
     geo.setAttribute('aColor', new THREE.BufferAttribute(colors, 3));
     geo.setAttribute('aSize', new THREE.BufferAttribute(sizes, 1));
     geo.setAttribute('aSeed', new THREE.BufferAttribute(seeds, 1));
+    geo.setAttribute('aRim', new THREE.BufferAttribute(rims, 1));
     geo.boundingSphere = new THREE.Sphere(new THREE.Vector3(), 120);
 
     this.uniforms = {
@@ -251,6 +260,7 @@ export class IntroSequence {
     const colors = new Float32Array(total * 3);
     const sizes = new Float32Array(total).fill(2.2);
     const seeds = new Float32Array(total);
+    const rims = new Float32Array(total);
     const dir = new Float32Array(total * 3);
 
     for (let i = 0; i < total; i++) {
@@ -273,6 +283,7 @@ export class IntroSequence {
     geo.setAttribute('aColor', new THREE.BufferAttribute(colors, 3));
     geo.setAttribute('aSize', new THREE.BufferAttribute(sizes, 1));
     geo.setAttribute('aSeed', new THREE.BufferAttribute(seeds, 1));
+    geo.setAttribute('aRim', new THREE.BufferAttribute(rims, 1));
     geo.boundingSphere = new THREE.Sphere(new THREE.Vector3(), 200);
 
     const mat = new THREE.ShaderMaterial({
@@ -320,6 +331,26 @@ export class IntroSequence {
     this.camera.updateProjectionMatrix();
     this.baseDistance = cam.distance;
     this.baseTargetY = cam.targetY;
+
+    // 星尘盘半径按画幅反算：竖屏手机上环最多只能和树底一样宽，
+    // 横屏笔记本上可以张到 2.6 倍树底。写死半径必然有一头越界。
+    this.dustThickness = height * 0.055;
+    this.dustTilt = dustTiltFor(aspect);
+    const rFit = fitDustRadius(
+      { distance: cam.distance, targetY: cam.targetY, tanV: cam.tanV, aspect },
+      {
+        tilt: this.dustTilt,
+        thickness: this.dustThickness,
+        marginX: 0.92,
+        marginTop: 0.9,
+        marginBottom: 0.96,
+        cap: baseRadius * 2.6,
+      },
+    );
+    this.dustR0 = rFit;
+    this.dustR1 = Math.min(rFit * 0.62, baseRadius * 1.45);
+    this.dustCos = Math.cos(this.dustTilt);
+    this.dustSin = Math.sin(this.dustTilt);
   }
 
   _buildComposer() {
@@ -388,12 +419,21 @@ export class IntroSequence {
     if (t < T.gatherEnd) {
       // A. 星尘汇聚：收缩 + 自转，纯加减乘，无逐粒子三角函数
       const p = t / T.gatherEnd;
-      const shrink = 1 - 0.42 * easeInOutCubic(p);
+      const cur = this.dustR0 + (this.dustR1 - this.dustR0) * easeInOutCubic(p);
+      const ct = this.dustCos;
+      const st = this.dustSin;
+      const thickK = 1 - 0.35 * p;
       for (let i = 0; i < n; i++) {
         const i3 = i * 3;
-        P[i3] = (this.dustX[i] * cs - this.dustZ[i] * sn) * shrink;
-        P[i3 + 1] = this.dustY[i] * (1 - 0.35 * p);
-        P[i3 + 2] = (this.dustX[i] * sn + this.dustZ[i] * cs) * shrink;
+        const u = this.dustU[i] * cur;
+        const x0 = this.dustX[i] * u;
+        const z0 = this.dustZ[i] * u;
+        const x = x0 * cs - z0 * sn;
+        const z = x0 * sn + z0 * cs;
+        const y0 = this.dustY[i] * thickK;
+        P[i3] = x;
+        P[i3 + 1] = y0 * ct - z * st;
+        P[i3 + 2] = y0 * st + z * ct;
       }
       mix = 0;
       bright = 0.9 + 0.3 * p;
@@ -403,22 +443,30 @@ export class IntroSequence {
       const extra = (1 - easeOutCubic(p)) * Math.PI * 2;
       const ce = Math.cos(extra);
       const se = Math.sin(extra);
-      const shrink = 0.58;
+      const cur = this.dustR1;
+      const ct = this.dustCos;
+      const st = this.dustSin;
 
       for (let i = 0; i < n; i++) {
         const i3 = i * 3;
         const delay = this.hf[i] * 0.55;
         const b = easeInOutCubic(clamp01((p - delay) / (1 - 0.55)));
 
-        const dx = (this.dustX[i] * cs - this.dustZ[i] * sn) * shrink;
-        const dz = (this.dustX[i] * sn + this.dustZ[i] * cs) * shrink;
+        const u = this.dustU[i] * cur;
+        const x0 = this.dustX[i] * u;
+        const z0 = this.dustZ[i] * u;
+        const dx = x0 * cs - z0 * sn;
+        const dz0 = x0 * sn + z0 * cs;
+        const y0 = this.dustY[i];
+        const dy = y0 * ct - dz0 * st;
+        const dz = y0 * st + dz0 * ct;
 
-        // 先在水平面上多绕一点，再落位
+        // 先在倾斜盘面上多绕一点，再落位
         const sx = dx * ce - dz * se;
         const sz = dx * se + dz * ce;
 
         P[i3] = sx + (this.treeX[i] - sx) * b;
-        P[i3 + 1] = this.dustY[i] + (this.treeY[i] - this.dustY[i]) * b;
+        P[i3 + 1] = dy + (this.treeY[i] - dy) * b;
         P[i3 + 2] = sz + (this.treeZ[i] - sz) * b;
       }
       mix = easeOutCubic(clamp01((p - 0.55) / 0.45));
