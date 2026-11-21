@@ -145,8 +145,6 @@ export class HoloTree {
     this._initBurst();
     this._initComposer();
 
-    this._onResize = () => this.resize();
-    window.addEventListener('resize', this._onResize);
   }
 
   // ---------------------------------------------------------------- setup
@@ -857,7 +855,6 @@ export class HoloTree {
   }
 
   dispose() {
-    window.removeEventListener('resize', this._onResize);
     this.composer.dispose?.();
     this.renderer.dispose();
     this.renderer.domElement.remove();

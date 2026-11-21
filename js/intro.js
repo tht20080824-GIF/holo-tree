@@ -609,7 +609,7 @@ export class IntroSequence {
 
   _updateText(t) {
     const start = 6.35;
-    const fadeOut = progress(t, 11.6, 12.05);
+    const fadeOut = progress(t, 11.65, 12.0);   // 文档：12.00s 随爆散淡出
     this.textWrap.style.opacity = String(1 - fadeOut);
     this.textWrap.style.visibility = t >= start - 0.1 && t < 12.1 ? 'visible' : 'hidden';
 

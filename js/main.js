@@ -23,7 +23,7 @@ const isSmallScreen = Math.min(window.innerWidth, window.innerHeight) < 720;
 if (isTouchDevice || isSmallScreen) {
   CONFIG.particles.count = 1000;        // 1600 → 1000
   CONFIG.quality.snowCount = 420;
-  CONFIG.quality.maxPixelRatio = 1.75;  // 手机上 3x DPR 会直接掉到 20fps
+  CONFIG.quality.maxPixelRatio = 1.6;   // 文档 §7：移动端上限 1.6（3x DPR 会掉到 20fps）
   CONFIG.photos.defaultCount = 5;
   CONFIG.ribbon.count = 5000;   // 光带也要降，否则手机掉帧
   CONFIG.ornaments.gifts = 4;
@@ -463,7 +463,19 @@ function frame(now) {
   }
 }
 
-window.addEventListener('resize', () => intro?.resize());
+// 视口变化统一走一个 debounce（文档 §10）：resize / 转屏 / 地址栏收起都重算
+let resizeTimer = 0;
+function onViewportChange() {
+  tree?.resize();
+  intro?.resize();
+}
+function scheduleResize() {
+  clearTimeout(resizeTimer);
+  resizeTimer = setTimeout(onViewportChange, 100);
+}
+window.addEventListener('resize', scheduleResize);
+window.addEventListener('orientationchange', scheduleResize);
+window.visualViewport?.addEventListener('resize', scheduleResize);
 
 requestAnimationFrame(frame);
 

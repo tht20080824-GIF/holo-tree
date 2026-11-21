@@ -599,7 +599,7 @@ body.ui-hidden #debug { opacity: 0; pointer-events: none; }
 
   <div id="toast"></div>
 
-  <script>window.__HOLO_NO_VENDOR__ = true; window.__HOLO_BUILD__ = "2026-11-21T21:14:18.075Z";</script>
+  <script>window.__HOLO_NO_VENDOR__ = true; window.__HOLO_BUILD__ = "2026-11-21T21:23:35.352Z";</script>
 <script>
 /* 由 tools/bundle.mjs 生成 —— 不要手改，改源码后重新构建 */
 (function () {
@@ -637,7 +637,7 @@ const isSmallScreen = Math.min(window.innerWidth, window.innerHeight) < 720;
 if (isTouchDevice || isSmallScreen) {
   CONFIG.particles.count = 1000;        // 1600 → 1000
   CONFIG.quality.snowCount = 420;
-  CONFIG.quality.maxPixelRatio = 1.75;  // 手机上 3x DPR 会直接掉到 20fps
+  CONFIG.quality.maxPixelRatio = 1.6;   // 文档 §7：移动端上限 1.6（3x DPR 会掉到 20fps）
   CONFIG.photos.defaultCount = 5;
   CONFIG.ribbon.count = 5000;   // 光带也要降，否则手机掉帧
   CONFIG.ornaments.gifts = 4;
@@ -1077,7 +1077,19 @@ function frame(now) {
   }
 }
 
-window.addEventListener('resize', () => intro?.resize());
+// 视口变化统一走一个 debounce（文档 §10）：resize / 转屏 / 地址栏收起都重算
+let resizeTimer = 0;
+function onViewportChange() {
+  tree?.resize();
+  intro?.resize();
+}
+function scheduleResize() {
+  clearTimeout(resizeTimer);
+  resizeTimer = setTimeout(onViewportChange, 100);
+}
+window.addEventListener('resize', scheduleResize);
+window.addEventListener('orientationchange', scheduleResize);
+window.visualViewport?.addEventListener('resize', scheduleResize);
 
 requestAnimationFrame(frame);
 
@@ -1846,8 +1858,6 @@ class HoloTree {
     this._initBurst();
     this._initComposer();
 
-    this._onResize = () => this.resize();
-    window.addEventListener('resize', this._onResize);
   }
 
   // ---------------------------------------------------------------- setup
@@ -2558,7 +2568,6 @@ class HoloTree {
   }
 
   dispose() {
-    window.removeEventListener('resize', this._onResize);
     this.composer.dispose?.();
     this.renderer.dispose();
     this.renderer.domElement.remove();
@@ -3530,7 +3539,7 @@ class IntroSequence {
 
   _updateText(t) {
     const start = 6.35;
-    const fadeOut = progress(t, 11.6, 12.05);
+    const fadeOut = progress(t, 11.65, 12.0);   // 文档：12.00s 随爆散淡出
     this.textWrap.style.opacity = String(1 - fadeOut);
     this.textWrap.style.visibility = t >= start - 0.1 && t < 12.1 ? 'visible' : 'hidden';
 
