@@ -466,7 +466,7 @@ body.ui-hidden #debug { opacity: 0; pointer-events: none; }
 
   <div id="toast"></div>
 
-  <script>window.__HOLO_NO_VENDOR__ = true; window.__HOLO_BUILD__ = "2026-11-21T18:38:56.800Z";</script>
+  <script>window.__HOLO_NO_VENDOR__ = true; window.__HOLO_BUILD__ = "2026-11-21T18:39:21.986Z";</script>
 <script>
 /* 由 tools/bundle.mjs 生成 —— 不要手改，改源码后重新构建 */
 (function () {
@@ -804,7 +804,11 @@ function frame(now) {
   if (debugOn && now - lastDebugAt > 100) {
     lastDebugAt = now;
     els.debug.innerHTML = [
-      `构建 ${window.__HOLO_BUILD__ ? window.__HOLO_BUILD__.slice(0, 19).replace('T', ' ') : 'dev'}`,
+      `构建 ${
+        window.__HOLO_BUILD__
+          ? new Date(window.__HOLO_BUILD__).toLocaleString('zh-CN', { hour12: false })
+          : 'dev'
+      }`,
       `手势识别 ${fps} fps`,
       `张开度 ${out.openness.toFixed(2)}  (张开>${CONFIG.gesture.openOn} / 握拳<${CONFIG.gesture.fistOn})`,
       `捏合比 ${out.pinchRatio.toFixed(2)}  (捏合<${CONFIG.gesture.pinchOn})`,
