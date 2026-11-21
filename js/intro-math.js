@@ -98,35 +98,20 @@ export function projectToNdc(p, camera) {
 
 // ---------------------------------------------------------------- 星尘盘
 
-/**
- * 星尘盘倾斜角（弧度）。
- *
- * 盘面平躺在 y≈0 时，相机几乎和盘面等高，投影出来是一条横贯屏幕的"煎饼"。
- * 26° 对应画面上椭圆短/长轴 ≈ 0.44（sin 26°），和参考画面一致。
- */
-export const DUST_TILT = (26 * Math.PI) / 180;
+/** 星尘盘倾斜（弧度）：不倾斜的话正对镜头会看成一条线 */
+export const DUST_TILT = (17 * Math.PI) / 180;
 
 /**
- * 按画幅选倾斜角：让投影出来的椭圆「短/长轴」稳定在 0.33 左右。
- *
- * 同样是 26° 的盘，竖屏手机上会被压成 0.2 的扁椭圆（因为 NDC 横向要除以 aspect），
- * 所以窄屏要看得更"俯"一点、宽屏可以接近躺平。0.33 取自参考画面的实测值。
+ * 星尘盘半径随进度收缩到 1.5×树底半径。
+ * 起点不能写死 6：树缩放后可能比 6 小，会变成"越聚越散"。
+ * 用 2.2× 树底半径作起点，保证任何树尺寸下都一定是收缩。
  */
-export function dustTiltFor(aspect, { ratio = 0.33, minDeg = 18, maxDeg = 45 } = {}) {
-  const s = Math.min(Math.max(ratio / Math.max(aspect, 1e-3), 1e-3), 1);
-  const deg = (Math.asin(s) * 180) / Math.PI;
-  const clamped = Math.min(Math.max(deg, minDeg), maxDeg);
-  return (clamped * Math.PI) / 180;
-}
-
-/**
- * 盘上一点 → 世界坐标：先绕 Y 自转（x/z），再绕 X 倾斜。
- * 顺序不能反：先倾斜再自转，盘子会像陀螺一样左右晃。
- */
-export function tiltDisc(x, y0, z, tilt = DUST_TILT) {
-  const ct = Math.cos(tilt);
-  const st = Math.sin(tilt);
-  return { x, y: y0 * ct - z * st, z: y0 * st + z * ct };
+export function dustRadius(p, baseRadius) {
+  const from = Math.max(6, baseRadius * 2.2);
+  const to = baseRadius * 1.5;
+  const k = Math.min(1, (to / Math.max(from, 1e-6)));
+  // from → to 的插值（from 更大时是收缩）
+  return from + (to - from) * easeInOutCubic(clamp01(p));
 }
 
 /** 星尘盘转速：随进度平方加快 */
@@ -136,16 +121,32 @@ export function dustSpin(p, base = 0.6) {
 }
 
 /**
- * 盘面在 NDC 里占多大（采样一圈，取最外侧）。
+ * 在倾斜盘上取一点（带垂直厚度，避免看成一条线）。
  *
- * 单看横向不够：近侧的盘边离镜头最近，透视会把它甩到画面下方，
- * 之前环"看着大得离谱"就是这个原因 —— 横向和纵向都得算。
+ * yJitter 必须由调用方预存 —— 这里如果用 Math.random()，
+ * 每帧都会重新随机，星尘会逐帧乱跳（这个坑踩过）。
  */
-export function dustRingExtent(radius, cam, {
-  tilt = DUST_TILT,
-  thickness = 0,
-  samples = 96,
-} = {}) {
+export function dustPoint(angle, radius, thickness = 0.5, yJitter = 0) {
+  const x = Math.cos(angle) * radius;
+  const z0 = Math.sin(angle) * radius;
+  const y0 = yJitter * thickness;
+  // 绕 X 轴倾斜 17°
+  return {
+    x,
+    y: y0 * Math.cos(DUST_TILT) - z0 * Math.sin(DUST_TILT),
+    z: y0 * Math.sin(DUST_TILT) + z0 * Math.cos(DUST_TILT),
+  };
+}
+
+// ---------------------------------------------------------------- 星尘盘的取景（只影响大小，不改分布）
+
+/**
+ * 盘面在 NDC 里占多大（一圈采样，取最外侧）。
+ *
+ * 只算横向不够：近侧的盘边离镜头最近，透视会把它甩到画面下方 ——
+ * 之前"环大得离谱"就是这里没算。
+ */
+export function dustRingExtent(radius, cam, { tilt, thickness = 0, samples = 96 } = {}) {
   const ct = Math.cos(tilt);
   const st = Math.sin(tilt);
   const { distance, targetY, tanV, aspect } = cam;
@@ -163,10 +164,8 @@ export function dustRingExtent(radius, cam, {
       const y = y0 * ct - z0 * st;
       const z = y0 * st + z0 * ct;
       const dz = distance - z;
-      if (dz <= 1e-3) {          // 越到镜头后面了，算越界
-        maxX = Infinity;
-        minY = -Infinity;
-        continue;
+      if (dz <= 1e-3) {          // 跑到镜头后面了，算越界
+        return { maxX: Infinity, minY: -Infinity, maxY: Infinity };
       }
       const ndcX = x / (dz * tanV * aspect);
       const ndcY = (y - targetY) / (dz * tanV);
@@ -179,18 +178,16 @@ export function dustRingExtent(radius, cam, {
 }
 
 /**
- * 反算「整圈都留在画面里」的星尘盘半径。
+ * 反算「整圈都留在画面里」的盘半径。
  *
- * 为什么不在 config 里写死半径：同一个世界半径，横屏笔记本上只占半屏，
- * 竖屏手机上会超出 4.5 倍。按画幅反算才能两头都好看。
- *
- * @returns 满足 margin 的最大半径（世界单位）；cap 用来防止横屏时环过大。
+ * 同一个世界半径，横屏笔记本只占半屏，竖屏手机能超出 4 倍 ——
+ * 所以半径必须按画幅算，不能写死。
  */
 export function fitDustRadius(cam, {
-  tilt = DUST_TILT,
+  tilt,
   thickness = 0,
-  marginX = 0.92,
-  marginTop = 0.9,
+  marginX = 0.94,
+  marginTop = 0.92,
   marginBottom = 0.96,
   cap = Infinity,
 } = {}) {
@@ -203,7 +200,6 @@ export function fitDustRadius(cam, {
   const hardCap = Math.min(cap, cam.distance * 0.92);
   if (fits(hardCap)) return hardCap;
 
-  // 越界程度随半径单调上升，二分找边界
   let lo = 0;
   let hi = hardCap;
   for (let i = 0; i < 40; i++) {
@@ -212,6 +208,33 @@ export function fitDustRadius(cam, {
     else hi = mid;
   }
   return lo;
+}
+
+/**
+ * 张开后的倾斜角。参考画面里椭圆的短/长轴 ≈ 0.36，而屏幕上的短/长轴
+ * 恰好等于 sin(倾斜角)（aspect 会在 NDC 里抵消掉），所以 22° 在任何画幅
+ * 上看起来都是同一个比例 —— 不需要按画幅去改。
+ */
+export const DUST_TILT_TARGET = (22 * Math.PI) / 180;
+
+/** 开场「张开」的起点：几乎平躺，对应参考画面 1.0s 时那条横带 */
+export const DUST_OPEN_FROM = (4 * Math.PI) / 180;
+
+/** 张开的时间窗（参考画面：1.0s 还是横带，1.8s 已经是环） */
+export const DUST_OPEN_START = 0.55;
+export const DUST_OPEN_END = 1.75;
+
+/**
+ * 盘面倾斜角随时间张开：横带 → 环。
+ * 少了这一步，环从第一帧就是个固定的圈，看着"硬"。
+ */
+export function dustTiltAt(
+  t,
+  target = DUST_TILT_TARGET,
+  { from = DUST_OPEN_FROM, start = DUST_OPEN_START, end = DUST_OPEN_END } = {},
+) {
+  const p = clamp01((t - start) / (end - start));
+  return from + (target - from) * easeInOutCubic(p);
 }
 
 // ---------------------------------------------------------------- 文字
