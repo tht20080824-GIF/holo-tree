@@ -72,6 +72,7 @@ const els = {
   status: $('#status'),
   gesture: $('#gesture'),
   mode: $('#mode'),
+  fps: $('#fps'),
   debug: $('#debug'),
   handDot: $('#hand-dot'),
   video: $('#cam-video'),
@@ -240,14 +241,23 @@ let handSeenAt = 0;      // 最近一次拿到手的时刻
 let fps = 0;
 let debugOn = false;
 
+let lastHandTrackAt = 0;
+
 function onHand(landmarks) {
   if (landmarks) {
     latestHand = measureHand(landmarks);
     handSeenAt = performance.now();
+    lastHandTrackAt = handSeenAt;
+    tracker.setHandActive(true);
     drawSkeleton(landmarks);
   } else {
     latestHand = null;
     ctx.clearRect(0, 0, CW, CH); // 手离开后别把上一帧的骨架留在画面上
+    // 手离开 2 秒就把摄像头/识别降回 30fps，别一直烤着
+    if (lastHandTrackAt && performance.now() - lastHandTrackAt > 2000) {
+      lastHandTrackAt = 0;
+      tracker.setHandActive(false);
+    }
   }
 }
 
@@ -439,6 +449,7 @@ let renderFps = 60;
 let qualityScale = 1;
 let perfElapsed = 0;
 let perfFrames = 0;
+let lastFpsHudAt = 0;
 
 function shouldRenderFrame(now) {
   if (lastRafAt) rafGap += ((now - lastRafAt) - rafGap) * 0.1;
@@ -469,6 +480,7 @@ function governFrameRate(dt) {
 
 function frame(now) {
   requestAnimationFrame(frame);
+  if (document.hidden) { lastTime = now; return; }   // 后台不渲染，回来也不跳帧
   if (!shouldRenderFrame(now)) return;
 
   // dt 上限 20ms = 50fps 的时间步长；掉帧时宁可慢一点，也不要一次跳一大步
@@ -539,6 +551,10 @@ function frame(now) {
   els.gesture.textContent = GESTURE_LABEL[out.gesture] ?? out.gesture;
   const dirText = rig.spinDir > 0 ? '▶ 右转' : rig.spinDir < 0 ? '◀ 左转' : '自然自转';
   els.mode.textContent = `${rig.mode === MODE.TREE ? '合拢' : '散开'} · ${dirText}`;
+  if (now - lastFpsHudAt > 500) {
+    lastFpsHudAt = now;
+    els.fps.textContent = `${renderFps.toFixed(0)} fps · 画质 ${(qualityScale * 100).toFixed(0)}%`;
+  }
 
   if (debugOn && now - lastDebugAt > 100) {
     lastDebugAt = now;

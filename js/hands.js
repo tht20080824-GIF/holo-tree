@@ -38,6 +38,8 @@ export class HandTracker {
     this.running = false;
     this._lastVideoTime = -1;
     this._lastFpsAt = 0;
+    this._fpsTarget = 30;      // 摄像头/识别的目标帧率，有手时 60、没手时 30
+    this._lastDetectAt = 0;
     this._frames = 0;
   }
 
@@ -97,7 +99,16 @@ export class HandTracker {
 
     this.onStatus('requesting-camera');
     this.stream = await navigator.mediaDevices.getUserMedia({
-      video: { width: 640, height: 480, facingMode: 'user' },
+      // 手势跟手动：向摄像头要 60fps（不支持时浏览器会自动退到最接近的帧率）
+      video: {
+        // 采集降到 480×360：CAM 预览本来就只有 160×120，识别精度几乎无感，
+        // 但摄像头/ISP 和 MediaPipe 的负担明显下降
+        width: 480,
+        height: 360,
+        // 默认 30fps（省电、降温）；检测到手之后 setHandActive(true) 会升到 60
+        frameRate: { ideal: 30, max: 60 },
+        facingMode: 'user',
+      },
       audio: false,
     });
 
@@ -109,11 +120,35 @@ export class HandTracker {
     this._tick();
   }
 
+  /** 有手 → 60fps；手离开 2 秒 → 退回 30fps（摄像头和识别一起降，直接降温） */
+  async setHandActive(active) {
+    const target = active ? 60 : 30;
+    if (this._fpsTarget === target) return;
+    this._fpsTarget = target;
+    const track = this.stream?.getVideoTracks?.()[0];
+    if (!track) return;
+    try {
+      await track.applyConstraints({ frameRate: { ideal: target, max: target } });
+    } catch (err) {
+      // 有些摄像头不支持动态改帧率，忽略即可
+    }
+  }
+
   _tick = () => {
     if (!this.running) return;
 
+    // 页面在后台就不做识别
+    if (document.hidden) {
+      this._scheduleNext();
+      return;
+    }
+
     const v = this.video;
-    if (v.readyState >= 2 && v.currentTime !== this._lastVideoTime) {
+    const nowMs = performance.now();
+    const tooSoon = nowMs - (this._lastDetectAt || 0) < 1000 / this._fpsTarget - 1;
+
+    if (!tooSoon && v.readyState >= 2 && v.currentTime !== this._lastVideoTime) {
+      this._lastDetectAt = nowMs;
       this._lastVideoTime = v.currentTime;
       try {
         const result = this.landmarker.detectForVideo(v, performance.now());
@@ -132,10 +167,14 @@ export class HandTracker {
       }
     }
 
-    // requestVideoFrameCallback 只在有新帧时回调，比 rAF 省电
-    if (v.requestVideoFrameCallback) v.requestVideoFrameCallback(() => this._tick());
-    else requestAnimationFrame(() => this._tick());
+    this._scheduleNext();
   };
+
+  _scheduleNext() {
+    const v = this.video;
+    if (v?.requestVideoFrameCallback) v.requestVideoFrameCallback(() => this._tick());
+    else requestAnimationFrame(() => this._tick());
+  }
 
   stop() {
     this.running = false;

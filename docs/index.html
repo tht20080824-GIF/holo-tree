@@ -583,6 +583,7 @@ body.ui-hidden #debug { opacity: 0; pointer-events: none; }
     <div class="hud-row"><span class="hud-key">状态</span><span id="status">初始化…</span></div>
     <div class="hud-row"><span class="hud-key">手势</span><span id="gesture">未检测到手</span></div>
     <div class="hud-row"><span class="hud-key">形态</span><span id="mode">合拢</span></div>
+    <div class="hud-row"><span class="hud-key">帧率</span><span id="fps">—</span></div>
   </div>
 
   <!-- 右上工具 -->
@@ -629,7 +630,7 @@ body.ui-hidden #debug { opacity: 0; pointer-events: none; }
 
   <div id="toast"></div>
 
-  <script>window.__HOLO_NO_VENDOR__ = true; window.__HOLO_BUILD__ = "2026-11-21T21:54:21.563Z";</script>
+  <script>window.__HOLO_NO_VENDOR__ = true; window.__HOLO_BUILD__ = "2026-11-21T22:01:39.182Z";</script>
 <script>
 /* 由 tools/bundle.mjs 生成 —— 不要手改，改源码后重新构建 */
 (function () {
@@ -716,6 +717,7 @@ const els = {
   status: $('#status'),
   gesture: $('#gesture'),
   mode: $('#mode'),
+  fps: $('#fps'),
   debug: $('#debug'),
   handDot: $('#hand-dot'),
   video: $('#cam-video'),
@@ -884,14 +886,23 @@ let handSeenAt = 0;      // 最近一次拿到手的时刻
 let fps = 0;
 let debugOn = false;
 
+let lastHandTrackAt = 0;
+
 function onHand(landmarks) {
   if (landmarks) {
     latestHand = measureHand(landmarks);
     handSeenAt = performance.now();
+    lastHandTrackAt = handSeenAt;
+    tracker.setHandActive(true);
     drawSkeleton(landmarks);
   } else {
     latestHand = null;
     ctx.clearRect(0, 0, CW, CH); // 手离开后别把上一帧的骨架留在画面上
+    // 手离开 2 秒就把摄像头/识别降回 30fps，别一直烤着
+    if (lastHandTrackAt && performance.now() - lastHandTrackAt > 2000) {
+      lastHandTrackAt = 0;
+      tracker.setHandActive(false);
+    }
   }
 }
 
@@ -1083,6 +1094,7 @@ let renderFps = 60;
 let qualityScale = 1;
 let perfElapsed = 0;
 let perfFrames = 0;
+let lastFpsHudAt = 0;
 
 function shouldRenderFrame(now) {
   if (lastRafAt) rafGap += ((now - lastRafAt) - rafGap) * 0.1;
@@ -1113,6 +1125,7 @@ function governFrameRate(dt) {
 
 function frame(now) {
   requestAnimationFrame(frame);
+  if (document.hidden) { lastTime = now; return; }   // 后台不渲染，回来也不跳帧
   if (!shouldRenderFrame(now)) return;
 
   // dt 上限 20ms = 50fps 的时间步长；掉帧时宁可慢一点，也不要一次跳一大步
@@ -1183,6 +1196,10 @@ function frame(now) {
   els.gesture.textContent = GESTURE_LABEL[out.gesture] ?? out.gesture;
   const dirText = rig.spinDir > 0 ? '▶ 右转' : rig.spinDir < 0 ? '◀ 左转' : '自然自转';
   els.mode.textContent = `${rig.mode === MODE.TREE ? '合拢' : '散开'} · ${dirText}`;
+  if (now - lastFpsHudAt > 500) {
+    lastFpsHudAt = now;
+    els.fps.textContent = `${renderFps.toFixed(0)} fps · 画质 ${(qualityScale * 100).toFixed(0)}%`;
+  }
 
   if (debugOn && now - lastDebugAt > 100) {
     lastDebugAt = now;
@@ -2835,6 +2852,8 @@ class HandTracker {
     this.running = false;
     this._lastVideoTime = -1;
     this._lastFpsAt = 0;
+    this._fpsTarget = 30;      // 摄像头/识别的目标帧率，有手时 60、没手时 30
+    this._lastDetectAt = 0;
     this._frames = 0;
   }
 
@@ -2894,7 +2913,16 @@ class HandTracker {
 
     this.onStatus('requesting-camera');
     this.stream = await navigator.mediaDevices.getUserMedia({
-      video: { width: 640, height: 480, facingMode: 'user' },
+      // 手势跟手动：向摄像头要 60fps（不支持时浏览器会自动退到最接近的帧率）
+      video: {
+        // 采集降到 480×360：CAM 预览本来就只有 160×120，识别精度几乎无感，
+        // 但摄像头/ISP 和 MediaPipe 的负担明显下降
+        width: 480,
+        height: 360,
+        // 默认 30fps（省电、降温）；检测到手之后 setHandActive(true) 会升到 60
+        frameRate: { ideal: 30, max: 60 },
+        facingMode: 'user',
+      },
       audio: false,
     });
 
@@ -2906,11 +2934,35 @@ class HandTracker {
     this._tick();
   }
 
+  /** 有手 → 60fps；手离开 2 秒 → 退回 30fps（摄像头和识别一起降，直接降温） */
+  async setHandActive(active) {
+    const target = active ? 60 : 30;
+    if (this._fpsTarget === target) return;
+    this._fpsTarget = target;
+    const track = this.stream?.getVideoTracks?.()[0];
+    if (!track) return;
+    try {
+      await track.applyConstraints({ frameRate: { ideal: target, max: target } });
+    } catch (err) {
+      // 有些摄像头不支持动态改帧率，忽略即可
+    }
+  }
+
   _tick = () => {
     if (!this.running) return;
 
+    // 页面在后台就不做识别
+    if (document.hidden) {
+      this._scheduleNext();
+      return;
+    }
+
     const v = this.video;
-    if (v.readyState >= 2 && v.currentTime !== this._lastVideoTime) {
+    const nowMs = performance.now();
+    const tooSoon = nowMs - (this._lastDetectAt || 0) < 1000 / this._fpsTarget - 1;
+
+    if (!tooSoon && v.readyState >= 2 && v.currentTime !== this._lastVideoTime) {
+      this._lastDetectAt = nowMs;
       this._lastVideoTime = v.currentTime;
       try {
         const result = this.landmarker.detectForVideo(v, performance.now());
@@ -2929,10 +2981,14 @@ class HandTracker {
       }
     }
 
-    // requestVideoFrameCallback 只在有新帧时回调，比 rAF 省电
-    if (v.requestVideoFrameCallback) v.requestVideoFrameCallback(() => this._tick());
-    else requestAnimationFrame(() => this._tick());
+    this._scheduleNext();
   };
+
+  _scheduleNext() {
+    const v = this.video;
+    if (v?.requestVideoFrameCallback) v.requestVideoFrameCallback(() => this._tick());
+    else requestAnimationFrame(() => this._tick());
+  }
 
   stop() {
     this.running = false;
