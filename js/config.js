@@ -64,6 +64,7 @@ export const CONFIG = {
     enabled: true,
     count: 17000,          // 桌面粒子数；手机上 main.js 会降到 9000
     loop: false,           // 播完进入交互模式；设 true 会一直循环
+    startDelay: 15,        // 等摄像头授权结果再开第一帧，最多等这么久（秒）
     bloom: { strength: 0.92, radius: 0.7, threshold: 0.3 },
     mobileBloom: { strength: 0.74, radius: 0.7, threshold: 0.3 },
   },

@@ -98,6 +98,9 @@ try {
 // 独立场景 + 独立 composer：播完就把整条序列 dispose 掉，主场景不受影响。
 
 let intro = null;
+let introStarted = false;
+let introHoldStart = 0;
+let cameraSettled = false;
 
 if (CONFIG.intro.enabled) {
   try {
@@ -114,9 +117,11 @@ if (CONFIG.intro.enabled) {
     const skip = document.createElement('button');
     skip.id = 'intro-skip';
     skip.type = 'button';
-    skip.textContent = '跳过开场';
+    skip.textContent = '直接开始';
     skip.addEventListener('click', () => {
-      if (intro) intro.done = true;
+      if (!intro) return;
+      if (!introStarted) startIntro();
+      else intro.done = true;
     });
     document.body.appendChild(skip);
     intro.skipButton = skip;
@@ -124,6 +129,15 @@ if (CONFIG.intro.enabled) {
     console.warn('[intro] 开场初始化失败，直接进入交互模式：', err);
     intro = null;
   }
+}
+
+function startIntro() {
+  if (!intro || introStarted) return;
+  introStarted = true;
+  introHoldStart = 0;
+  if (intro.skipButton) intro.skipButton.textContent = '跳过开场';
+  els.loader.classList.add('hidden');
+  toast('开场开始');
 }
 
 function endIntro() {
@@ -330,7 +344,18 @@ function frame(now) {
 
   if (intro) {
     if (intro.done) endIntro();
-    else {
+    else if (!introStarted) {
+      // 等摄像头权限弹窗有结果（同意/拒绝）再开始，否则开场会被弹窗盖住
+      if (!introHoldStart) introHoldStart = now;
+      const waited = (now - introHoldStart) / 1000;
+      if (cameraSettled || waited >= CONFIG.intro.startDelay) startIntro();
+      else {
+        els.loaderText.textContent = isTouchDevice
+          ? '正在准备摄像头…（可直接开始）'
+          : '等待摄像头授权…（最多 15 秒）';
+        return;
+      }
+    } else {
       intro.update(dt);
       intro.render();
       if (firstFrame) {
@@ -425,6 +450,7 @@ async function startCamera() {
 
   try {
     await tracker.start();
+    cameraSettled = true;
     removeGate();
   } catch (err) {
     console.warn('[main] 手势启动失败：', err);
@@ -434,6 +460,7 @@ async function startCamera() {
     statusText(insecure ? 'insecure' : denied ? 'camera-denied' : 'model-failed');
     els.camPanel.classList.add('hidden');
 
+    cameraSettled = true;
     if (insecure) {
       setGateState('insecure');
       if (isTouchDevice && gyro.button) gyro.button.classList.add('primary');
@@ -513,7 +540,10 @@ function removeGate() {
 gate.addEventListener('click', (e) => {
   const action = e.target?.dataset?.action;
   if (action === 'start') startCamera();
-  if (action === 'skip') removeGate();
+  if (action === 'skip') {
+    cameraSettled = true;   // 用户明确不启用摄像头 → 开场不必再等
+    removeGate();
+  }
 });
 
 // 手机上必须先有一次点击（iOS 的硬性要求）；桌面直接尝试
