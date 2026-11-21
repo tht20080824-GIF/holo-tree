@@ -11,6 +11,7 @@ import {
   ribbonY,
   ribbonAngle,
   ribbonPitch,
+  pointScale,
 } from '../js/ribbon-math.js';
 import { CONFIG } from '../js/config.js';
 
@@ -70,4 +71,12 @@ test('光带：与树身布局共用同一个收分公式', () => {
 
 test('光带：粒子数在规格区间（桌面 8000~12000）', () => {
   assert.ok(CONFIG.ribbon.count >= 8000 && CONFIG.ribbon.count <= 12000, `count=${CONFIG.ribbon.count}`);
+});
+
+test('光带：点尺寸在真实场景尺度下必须可见（≥2 像素）', () => {
+  // 典型场景：视口 800 高、DPR 2、视角 44°、相机距离 40
+  const scale = pointScale(800, 2, 44);
+  const sizePx = (1.0 * scale) / 40;
+  assert.ok(sizePx >= 2, `光带粒子只有 ${sizePx.toFixed(2)} 像素，会看不见`);
+  assert.ok(sizePx < 24, `光带粒子 ${sizePx.toFixed(2)} 像素，太粗了`);
 });

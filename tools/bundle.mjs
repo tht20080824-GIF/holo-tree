@@ -269,7 +269,7 @@ const safeBundle = bundle.replace(/<\/script/gi, '<\\/script');
 const openTag = CDN_MODE ? '<script type="module">' : '<script>';
 html = html.replace(
   /<script type="module" src="\.\/js\/main\.js"><\/script>/,
-  () => `<script>window.__HOLO_NO_VENDOR__ = true;</script>\n${openTag}\n${safeBundle}\n</script>`,
+  () => `<script>window.__HOLO_NO_VENDOR__ = true; window.__HOLO_BUILD__ = "${new Date().toISOString()}";</script>\n${openTag}\n${safeBundle}\n</script>`,
 );
 
 if (html.includes('__defs') === false) throw new Error('入口脚本没有被替换，检查 index.html 的 script 标签');

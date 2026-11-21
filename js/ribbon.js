@@ -17,6 +17,7 @@ import {
   RIBBON_TOP_RATIO,
   RIBBON_RADIUS_FACTOR,
   TAPER_EXPONENT,
+  pointScale,
 } from './ribbon-math.js';
 
 const VERT = /* glsl */ `
@@ -61,7 +62,8 @@ const VERT = /* glsl */ `
 
     vec4 mv = modelViewMatrix * vec4(pos, 1.0);
     gl_Position = projectionMatrix * mv;
-    gl_PointSize = aSize * uPointScale / max(0.06, -mv.z);
+    // 夹住下限：再小的点也要 1 像素，否则整条光带会"消失"
+    gl_PointSize = clamp(aSize * uPointScale / max(0.06, -mv.z), 1.0, 64.0);
 
     // 转到树身背后时压暗 40%：拿"粒子相对树心"与"粒子朝向相机"点乘判断
     vec4 world = modelMatrix * vec4(pos, 1.0);
@@ -182,10 +184,7 @@ export function createRibbon({
       uniforms.uTime.value += dt;
       uniforms.uOpacity.value = opacity;
       uniforms.uCamPos.value.copy(camera.position);
-      // 点尺寸沿用主场景公式：aSize * 0.0086 * H / (2*tanV) / -z
-      const tanV = Math.tan((camera.fov * Math.PI) / 360);
-      uniforms.uPointScale.value =
-        (window.innerHeight * pixelRatio) / (2 * tanV) * 0.0086;
+      uniforms.uPointScale.value = pointScale(window.innerHeight, pixelRatio, camera.fov);
     },
   };
 }

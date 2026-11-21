@@ -466,7 +466,7 @@ body.ui-hidden #debug { opacity: 0; pointer-events: none; }
 
   <div id="toast"></div>
 
-  <script>window.__HOLO_NO_VENDOR__ = true;</script>
+  <script>window.__HOLO_NO_VENDOR__ = true; window.__HOLO_BUILD__ = "2026-11-21T18:38:56.800Z";</script>
 <script>
 /* 由 tools/bundle.mjs 生成 —— 不要手改，改源码后重新构建 */
 (function () {
@@ -804,6 +804,7 @@ function frame(now) {
   if (debugOn && now - lastDebugAt > 100) {
     lastDebugAt = now;
     els.debug.innerHTML = [
+      `构建 ${window.__HOLO_BUILD__ ? window.__HOLO_BUILD__.slice(0, 19).replace('T', ' ') : 'dev'}`,
       `手势识别 ${fps} fps`,
       `张开度 ${out.openness.toFixed(2)}  (张开>${CONFIG.gesture.openOn} / 握拳<${CONFIG.gesture.fistOn})`,
       `捏合比 ${out.pinchRatio.toFixed(2)}  (捏合<${CONFIG.gesture.pinchOn})`,
@@ -57078,7 +57079,7 @@ __exports["radiusProfile"] = radiusProfile;
  */
 
 const THREE = __require("vendor/three.module.js");
-const { TAU, RIBBON_TURNS, RIBBON_TOP_RATIO, RIBBON_RADIUS_FACTOR, TAPER_EXPONENT } = __require("js/ribbon-math.js");
+const { TAU, RIBBON_TURNS, RIBBON_TOP_RATIO, RIBBON_RADIUS_FACTOR, TAPER_EXPONENT, pointScale } = __require("js/ribbon-math.js");
 
 const VERT = /* glsl */ `
   attribute float aPhase;      // 在螺旋上的位置 0~1
@@ -57122,7 +57123,8 @@ const VERT = /* glsl */ `
 
     vec4 mv = modelViewMatrix * vec4(pos, 1.0);
     gl_Position = projectionMatrix * mv;
-    gl_PointSize = aSize * uPointScale / max(0.06, -mv.z);
+    // 夹住下限：再小的点也要 1 像素，否则整条光带会"消失"
+    gl_PointSize = clamp(aSize * uPointScale / max(0.06, -mv.z), 1.0, 64.0);
 
     // 转到树身背后时压暗 40%：拿"粒子相对树心"与"粒子朝向相机"点乘判断
     vec4 world = modelMatrix * vec4(pos, 1.0);
@@ -57243,10 +57245,7 @@ function createRibbon({
       uniforms.uTime.value += dt;
       uniforms.uOpacity.value = opacity;
       uniforms.uCamPos.value.copy(camera.position);
-      // 点尺寸沿用主场景公式：aSize * 0.0086 * H / (2*tanV) / -z
-      const tanV = Math.tan((camera.fov * Math.PI) / 360);
-      uniforms.uPointScale.value =
-        (window.innerHeight * pixelRatio) / (2 * tanV) * 0.0086;
+      uniforms.uPointScale.value = pointScale(window.innerHeight, pixelRatio, camera.fov);
     },
   };
 }
@@ -57774,6 +57773,18 @@ function ribbonAngle(t, turns = RIBBON_TURNS) {
   return t * turns * TAU;
 }
 
+/**
+ * 点尺寸换算：把"世界单位下的粒子直径"换成屏幕像素。
+ *
+ * 场景尺度：树高约 24，相机 z≈40，垂直视角 44°。
+ * 早期照搬了一个 0.0086 的系数，算出来是 0.4 像素 —— 等于肉眼不可见。
+ * 正确做法：sizePx = worldSize * (H / (2*tanV)) / distance
+ */
+function pointScale(viewportHeight, pixelRatio, fovDeg, worldSize = 0.12) {
+  const tanV = Math.tan((fovDeg * Math.PI) / 360);
+  return (viewportHeight * pixelRatio * worldSize) / (2 * tanV);
+}
+
 /** 圈间距是否均匀：相邻两圈的垂直间距 */
 function ribbonPitch(height) {
   return (height * RIBBON_TOP_RATIO) / RIBBON_TURNS;
@@ -57783,6 +57794,7 @@ __exports["trunkRadius"] = trunkRadius;
 __exports["ribbonRadius"] = ribbonRadius;
 __exports["ribbonY"] = ribbonY;
 __exports["ribbonAngle"] = ribbonAngle;
+__exports["pointScale"] = pointScale;
 __exports["ribbonPitch"] = ribbonPitch;
 __exports["TAU"] = TAU;
 __exports["TAPER_EXPONENT"] = TAPER_EXPONENT;

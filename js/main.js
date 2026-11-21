@@ -323,6 +323,7 @@ function frame(now) {
   if (debugOn && now - lastDebugAt > 100) {
     lastDebugAt = now;
     els.debug.innerHTML = [
+      `构建 ${window.__HOLO_BUILD__ ? window.__HOLO_BUILD__.slice(0, 19).replace('T', ' ') : 'dev'}`,
       `手势识别 ${fps} fps`,
       `张开度 ${out.openness.toFixed(2)}  (张开>${CONFIG.gesture.openOn} / 握拳<${CONFIG.gesture.fistOn})`,
       `捏合比 ${out.pinchRatio.toFixed(2)}  (捏合<${CONFIG.gesture.pinchOn})`,

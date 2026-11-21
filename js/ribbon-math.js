@@ -40,6 +40,18 @@ export function ribbonAngle(t, turns = RIBBON_TURNS) {
   return t * turns * TAU;
 }
 
+/**
+ * 点尺寸换算：把"世界单位下的粒子直径"换成屏幕像素。
+ *
+ * 场景尺度：树高约 24，相机 z≈40，垂直视角 44°。
+ * 早期照搬了一个 0.0086 的系数，算出来是 0.4 像素 —— 等于肉眼不可见。
+ * 正确做法：sizePx = worldSize * (H / (2*tanV)) / distance
+ */
+export function pointScale(viewportHeight, pixelRatio, fovDeg, worldSize = 0.12) {
+  const tanV = Math.tan((fovDeg * Math.PI) / 360);
+  return (viewportHeight * pixelRatio * worldSize) / (2 * tanV);
+}
+
 /** 圈间距是否均匀：相邻两圈的垂直间距 */
 export function ribbonPitch(height) {
   return (height * RIBBON_TOP_RATIO) / RIBBON_TURNS;
