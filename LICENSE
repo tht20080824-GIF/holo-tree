@@ -1,0 +1,57 @@
+HOLO TREE 商业授权条款
+Copyright (c) 2026 tht20080824-GIF. All rights reserved.
+（正式对外售卖前，请把上面的署名换成你的真实姓名或公司名）
+
+本授权适用于本仓库中的全部原创代码、样式、页面与视觉设计
+（`index.html`、`css/`、`js/`、`docs/` 及本仓库内的文档，以下称"本作品"）。
+
+一、你可以做什么（购买成品后）
+
+1. 将本作品部署到自己的服务器、域名或任意静态托管上，用于自己的活动、
+   门店、展示、个人项目等场景；
+2. 为适配自己的场景修改文案、颜色、照片、参数；
+3. 在交付范围内，把部署好的成品站点提供给自己的最终用户访问。
+
+二、你不可以做什么
+
+1. 转售、转授权、分发本作品的源码或可再分发的构建产物；
+2. 把本作品（或其主要部分）作为模板、素材包、课程素材再次出售；
+3. 删除或隐藏本作品中的版权声明与第三方许可声明；
+4. 声称本作品是你的原创，或用于误导性的宣传。
+
+三、第三方组件
+
+本作品使用了以下开源组件，它们分别遵循各自的许可证，相关权利不归本作品作者：
+
+- three.js（MIT）
+- MediaPipe Tasks Vision 与手部模型（Apache-2.0）
+- Italiana、Noto Serif SC 字体（SIL Open Font License 1.1）
+
+分发本作品时，必须同时保留 `THIRD_PARTY.md` 及其中的许可证声明。
+
+四、"手势圣诞树"这个玩法
+
+该玩法最早由第三方公开演示，本作品是独立实现。本授权仅覆盖本作品的代码与设计，
+不授予任何与"原创玩法"相关的排他权利。
+
+五、免责
+
+本作品按"现状"提供，不附带任何明示或默示的担保。因使用本作品造成的任何直接或
+间接损失，作者不承担责任。
+
+六、其他
+
+如需超出上述范围的权利（例如再分发、模板化销售、贴牌），需另行取得书面授权。
+
+---
+
+HOLO TREE — Commercial License (summary)
+
+Copyright (c) 2026 tht20080824-GIF. All rights reserved.
+
+You may deploy this work on your own hosting for your own use, and modify it for
+that purpose. You may not resell, redistribute, sublicense, or repackage the
+source or build as a template, and you may not remove copyright or third-party
+notices. Third-party components (three.js — MIT; MediaPipe — Apache-2.0;
+fonts — SIL OFL 1.1) remain under their own licenses; see THIRD_PARTY.md.
+The work is provided "as is", without warranty of any kind.

@@ -1,6 +1,6 @@
 # HOLO TREE · 手势圣诞树（自研版）
 
-**在线版（GitHub Pages，永久）：<https://tht20080824-gif.github.io/holo-tree/>**
+**在线版（GitHub Pages，永久）：<https://tht20080824-gif.github.io/THTdh007/>**
 
 一棵用手比划就能操控的 3D 粒子圣诞树。**代码是自己的**，不是从任何人那里改的副本：
 three.js 场景、手势识别、操控手感、UI 全部按我们的需求重写，注释和可调参数都留着。
@@ -195,6 +195,11 @@ node tools/verify.mjs
 Nginx 默认就够用；如果手势加载报错，先看 Network 里这个文件的响应码。
 
 ---
+
+## 授权与商用
+
+本作品按「卖成品」授权：购买后可部署、可改、可自用；不可转售源码、
+不可作为模板再分发。完整条款见 [`LICENSE`](LICENSE)。
 
 ## 依赖与许可
 
