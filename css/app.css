@@ -391,3 +391,85 @@ body.ui-hidden #debug { opacity: 0; pointer-events: none; }
 }
 
 /* 照片聚焦已改为 3D 动画（见 js/tree.js 的 focusPhoto），这里不再需要 DOM 浮层样式 */
+
+/* ------------------------------------------------- 开场动画：文字层 / 闪光 / 跳过 */
+#intro-text {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: calc(4.2vh + env(safe-area-inset-bottom, 0px));
+  z-index: 70;
+  text-align: center;
+  pointer-events: none;
+  transition: opacity 0.25s linear;
+  padding: 0 env(safe-area-inset-left, 0px);
+}
+
+.intro-merry {
+  font-family: 'Great Vibes', 'Snell Roundhand', 'Segoe Script', cursive;
+  font-size: clamp(26px, min(9vw, 6.2vh), 92px);
+  line-height: 1.15;
+  letter-spacing: 0.01em;
+  background: linear-gradient(178deg, #fff6d2 0%, #f5c86b 46%, #c68b2e 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  filter: drop-shadow(0 0 16px rgba(245, 200, 107, 0.55))
+          drop-shadow(0 0 44px rgba(245, 200, 107, 0.26));
+  white-space: nowrap;
+}
+
+/* 关键：background-clip 必须写在每个 span 上，只写父级会让整行文字不可见 */
+.intro-letter {
+  display: inline-block;
+  background: linear-gradient(178deg, #fff6d2 0%, #f5c86b 46%, #c68b2e 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  clip-path: inset(0 100% 0 0);
+}
+
+.intro-cn {
+  margin-top: 0.5em;
+  font-family: 'Noto Serif SC', 'Songti SC', 'STSong', serif;
+  font-size: clamp(10px, min(3.1vw, 2.05vh), 19px);
+  letter-spacing: 0.42em;
+  text-indent: 0.42em;
+  color: #f3d79a;
+  opacity: 0;
+  transition: opacity 0.4s ease;
+  filter: drop-shadow(0 0 12px rgba(243, 215, 154, 0.45));
+}
+
+#intro-flash {
+  position: fixed;
+  inset: 0;
+  z-index: 75;
+  pointer-events: none;
+  opacity: 0;
+  background: radial-gradient(circle at 50% 46%, #ffffff 0%, rgba(255, 250, 235, 0.82) 34%, rgba(255, 245, 220, 0) 72%);
+  mix-blend-mode: screen;
+}
+
+#intro-skip {
+  position: fixed;
+  right: calc(20px + env(safe-area-inset-right, 0px));
+  bottom: calc(20px + env(safe-area-inset-bottom, 0px));
+  z-index: 80;
+  padding: 9px 16px;
+  border-radius: 999px;
+  border: 1px solid rgba(233, 201, 124, 0.35);
+  background: rgba(8, 14, 18, 0.6);
+  -webkit-backdrop-filter: blur(10px);
+  backdrop-filter: blur(10px);
+  color: #e9c97c;
+  font-size: 12px;
+  letter-spacing: 0.06em;
+  cursor: pointer;
+}
+#intro-skip:hover { background: rgba(233, 201, 124, 0.14); }
+
+@media (max-width: 720px), (pointer: coarse) {
+  #intro-text { bottom: calc(4.2vh + env(safe-area-inset-bottom, 0px)); }
+  #intro-skip { right: 12px; bottom: calc(12px + env(safe-area-inset-bottom, 0px)); padding: 7px 13px; }
+}

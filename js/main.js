@@ -14,6 +14,7 @@ import { HoloTree } from './tree.js';
 import { HandTracker } from './hands.js';
 import { attachPointerControls } from './touch.js';
 import { GyroControl } from './gyro.js';
+import { IntroSequence } from './intro.js';
 
 // --- 手机/小屏：降粒子、降像素比，先把帧率稳住 ---
 const isTouchDevice = window.matchMedia?.('(pointer: coarse)').matches || 'ontouchstart' in window;
@@ -28,6 +29,8 @@ if (isTouchDevice || isSmallScreen) {
   CONFIG.ornaments.gifts = 4;
   CONFIG.ornaments.bows = 2;
   CONFIG.ornaments.density = 0.6;   // 装饰粒子密度减半，手机才稳
+  CONFIG.intro.count = 9000;
+  CONFIG.intro.bloom = CONFIG.intro.mobileBloom;
 }
 
 // ---------------------------------------------------------------- 全局错误兜底
@@ -89,6 +92,46 @@ try {
   console.error(err);
   els.loaderText.textContent = '这台设备的浏览器不支持 WebGL，换个浏览器或开硬件加速再试';
   throw err;
+}
+
+// ------------------------------------------------------------------ 开场动画
+// 独立场景 + 独立 composer：播完就把整条序列 dispose 掉，主场景不受影响。
+
+let intro = null;
+
+if (CONFIG.intro.enabled) {
+  try {
+    intro = new IntroSequence({
+      shape: {
+        height: CONFIG.particles.height,
+        floorY: CONFIG.particles.floorY,
+        baseRadius: CONFIG.particles.radius,
+      },
+      cfg: CONFIG.intro,
+      renderer: tree.renderer,
+    });
+
+    const skip = document.createElement('button');
+    skip.id = 'intro-skip';
+    skip.type = 'button';
+    skip.textContent = '跳过开场';
+    skip.addEventListener('click', () => {
+      if (intro) intro.done = true;
+    });
+    document.body.appendChild(skip);
+    intro.skipButton = skip;
+  } catch (err) {
+    console.warn('[intro] 开场初始化失败，直接进入交互模式：', err);
+    intro = null;
+  }
+}
+
+function endIntro() {
+  if (!intro) return;
+  intro.skipButton?.remove();
+  intro.dispose();
+  intro = null;
+  els.loader.classList.add('hidden');
 }
 
 // ------------------------------------------------------------------ 照片聚焦
@@ -285,6 +328,19 @@ function frame(now) {
 
   if (now - handSeenAt > 400) latestHand = null; // 手离开画面一段时间就当作没手
 
+  if (intro) {
+    if (intro.done) endIntro();
+    else {
+      intro.update(dt);
+      intro.render();
+      if (firstFrame) {
+        firstFrame = false;
+        els.loader.classList.add('hidden');
+      }
+      return;
+    }
+  }
+
   const out = recognizer.update(latestHand, dt);
 
   // 手势切换形态（张开/握拳）
@@ -344,6 +400,8 @@ function frame(now) {
     els.loader.classList.add('hidden');
   }
 }
+
+window.addEventListener('resize', () => intro?.resize());
 
 requestAnimationFrame(frame);
 

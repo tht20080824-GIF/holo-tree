@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
   <title>HOLO TREE · 手势圣诞树</title>
   <link rel="icon" href="data:," />
+  <link href="https://fonts.googleapis.com/css2?family=Great+Vibes&family=Noto+Serif+SC:wght@400;600&display=swap" rel="stylesheet" />
   <meta name="description" content="用摄像头手势控制的 3D 粒子圣诞树" />
   <style>
 /* HOLO TREE — 全部样式，不依赖任何 CSS 框架 */
@@ -401,6 +402,88 @@ body.ui-hidden #debug { opacity: 0; pointer-events: none; }
 
 /* 照片聚焦已改为 3D 动画（见 js/tree.js 的 focusPhoto），这里不再需要 DOM 浮层样式 */
 
+/* ------------------------------------------------- 开场动画：文字层 / 闪光 / 跳过 */
+#intro-text {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: calc(4.2vh + env(safe-area-inset-bottom, 0px));
+  z-index: 70;
+  text-align: center;
+  pointer-events: none;
+  transition: opacity 0.25s linear;
+  padding: 0 env(safe-area-inset-left, 0px);
+}
+
+.intro-merry {
+  font-family: 'Great Vibes', 'Snell Roundhand', 'Segoe Script', cursive;
+  font-size: clamp(26px, min(9vw, 6.2vh), 92px);
+  line-height: 1.15;
+  letter-spacing: 0.01em;
+  background: linear-gradient(178deg, #fff6d2 0%, #f5c86b 46%, #c68b2e 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  filter: drop-shadow(0 0 16px rgba(245, 200, 107, 0.55))
+          drop-shadow(0 0 44px rgba(245, 200, 107, 0.26));
+  white-space: nowrap;
+}
+
+/* 关键：background-clip 必须写在每个 span 上，只写父级会让整行文字不可见 */
+.intro-letter {
+  display: inline-block;
+  background: linear-gradient(178deg, #fff6d2 0%, #f5c86b 46%, #c68b2e 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  clip-path: inset(0 100% 0 0);
+}
+
+.intro-cn {
+  margin-top: 0.5em;
+  font-family: 'Noto Serif SC', 'Songti SC', 'STSong', serif;
+  font-size: clamp(10px, min(3.1vw, 2.05vh), 19px);
+  letter-spacing: 0.42em;
+  text-indent: 0.42em;
+  color: #f3d79a;
+  opacity: 0;
+  transition: opacity 0.4s ease;
+  filter: drop-shadow(0 0 12px rgba(243, 215, 154, 0.45));
+}
+
+#intro-flash {
+  position: fixed;
+  inset: 0;
+  z-index: 75;
+  pointer-events: none;
+  opacity: 0;
+  background: radial-gradient(circle at 50% 46%, #ffffff 0%, rgba(255, 250, 235, 0.82) 34%, rgba(255, 245, 220, 0) 72%);
+  mix-blend-mode: screen;
+}
+
+#intro-skip {
+  position: fixed;
+  right: calc(20px + env(safe-area-inset-right, 0px));
+  bottom: calc(20px + env(safe-area-inset-bottom, 0px));
+  z-index: 80;
+  padding: 9px 16px;
+  border-radius: 999px;
+  border: 1px solid rgba(233, 201, 124, 0.35);
+  background: rgba(8, 14, 18, 0.6);
+  -webkit-backdrop-filter: blur(10px);
+  backdrop-filter: blur(10px);
+  color: #e9c97c;
+  font-size: 12px;
+  letter-spacing: 0.06em;
+  cursor: pointer;
+}
+#intro-skip:hover { background: rgba(233, 201, 124, 0.14); }
+
+@media (max-width: 720px), (pointer: coarse) {
+  #intro-text { bottom: calc(4.2vh + env(safe-area-inset-bottom, 0px)); }
+  #intro-skip { right: 12px; bottom: calc(12px + env(safe-area-inset-bottom, 0px)); padding: 7px 13px; }
+}
+
 </style>
 
   <!-- three.js 全部走本地 vendor，不依赖外网 CDN -->
@@ -466,7 +549,7 @@ body.ui-hidden #debug { opacity: 0; pointer-events: none; }
 
   <div id="toast"></div>
 
-  <script>window.__HOLO_NO_VENDOR__ = true; window.__HOLO_BUILD__ = "2026-11-21T18:51:47.420Z";</script>
+  <script>window.__HOLO_NO_VENDOR__ = true; window.__HOLO_BUILD__ = "2026-11-21T18:55:49.467Z";</script>
 <script>
 /* 由 tools/bundle.mjs 生成 —— 不要手改，改源码后重新构建 */
 (function () {
@@ -495,6 +578,7 @@ const { HoloTree } = __require("js/tree.js");
 const { HandTracker } = __require("js/hands.js");
 const { attachPointerControls } = __require("js/touch.js");
 const { GyroControl } = __require("js/gyro.js");
+const { IntroSequence } = __require("js/intro.js");
 
 // --- 手机/小屏：降粒子、降像素比，先把帧率稳住 ---
 const isTouchDevice = window.matchMedia?.('(pointer: coarse)').matches || 'ontouchstart' in window;
@@ -509,6 +593,8 @@ if (isTouchDevice || isSmallScreen) {
   CONFIG.ornaments.gifts = 4;
   CONFIG.ornaments.bows = 2;
   CONFIG.ornaments.density = 0.6;   // 装饰粒子密度减半，手机才稳
+  CONFIG.intro.count = 9000;
+  CONFIG.intro.bloom = CONFIG.intro.mobileBloom;
 }
 
 // ---------------------------------------------------------------- 全局错误兜底
@@ -570,6 +656,46 @@ try {
   console.error(err);
   els.loaderText.textContent = '这台设备的浏览器不支持 WebGL，换个浏览器或开硬件加速再试';
   throw err;
+}
+
+// ------------------------------------------------------------------ 开场动画
+// 独立场景 + 独立 composer：播完就把整条序列 dispose 掉，主场景不受影响。
+
+let intro = null;
+
+if (CONFIG.intro.enabled) {
+  try {
+    intro = new IntroSequence({
+      shape: {
+        height: CONFIG.particles.height,
+        floorY: CONFIG.particles.floorY,
+        baseRadius: CONFIG.particles.radius,
+      },
+      cfg: CONFIG.intro,
+      renderer: tree.renderer,
+    });
+
+    const skip = document.createElement('button');
+    skip.id = 'intro-skip';
+    skip.type = 'button';
+    skip.textContent = '跳过开场';
+    skip.addEventListener('click', () => {
+      if (intro) intro.done = true;
+    });
+    document.body.appendChild(skip);
+    intro.skipButton = skip;
+  } catch (err) {
+    console.warn('[intro] 开场初始化失败，直接进入交互模式：', err);
+    intro = null;
+  }
+}
+
+function endIntro() {
+  if (!intro) return;
+  intro.skipButton?.remove();
+  intro.dispose();
+  intro = null;
+  els.loader.classList.add('hidden');
 }
 
 // ------------------------------------------------------------------ 照片聚焦
@@ -766,6 +892,19 @@ function frame(now) {
 
   if (now - handSeenAt > 400) latestHand = null; // 手离开画面一段时间就当作没手
 
+  if (intro) {
+    if (intro.done) endIntro();
+    else {
+      intro.update(dt);
+      intro.render();
+      if (firstFrame) {
+        firstFrame = false;
+        els.loader.classList.add('hidden');
+      }
+      return;
+    }
+  }
+
   const out = recognizer.update(latestHand, dt);
 
   // 手势切换形态（张开/握拳）
@@ -825,6 +964,8 @@ function frame(now) {
     els.loader.classList.add('hidden');
   }
 }
+
+window.addEventListener('resize', () => intro?.resize());
 
 requestAnimationFrame(frame);
 
@@ -1011,6 +1152,14 @@ const CONFIG = {
     openOn: 1.6,       // 五指张开度大于它=张开手掌（真手张开约 2.0）
     fistOn: 1.15,      // 张开度小于它=握拳（真手握拳约 0.9）
     holdTime: 0.3,     // 手势保持多久才切换形态（秒），防止误触
+  },
+
+  intro: {
+    enabled: true,
+    count: 17000,          // 桌面粒子数；手机上 main.js 会降到 9000
+    loop: false,           // 播完进入交互模式；设 true 会一直循环
+    bloom: { strength: 0.92, radius: 0.7, threshold: 0.3 },
+    mobileBloom: { strength: 0.74, radius: 0.7, threshold: 0.3 },
   },
 
   ribbon: {
@@ -2665,6 +2814,530 @@ class GyroControl {
 }
 
 __exports["GyroControl"] = GyroControl;
+  };
+  __defs["js/intro.js"] = function (__require, __exports) {
+/**
+ * 16 秒开场动画：星尘汇聚 → 螺旋垒树 → 塔尖炸光 → 烟花 + 文字 →
+ * 定格 → 内收蓄力 → 爆散冲击 → 闪光 → 回卷重组 → 淡出循环。
+ *
+ * 实现要点（对应 02-开场动画-提示词.md）：
+ * - 单个 Points + 单个 BufferGeometry，一次 draw call
+ * - 所有时间轴计算在 CPU 上做，只更新 position 属性，绝不重建几何体
+ * - 取景用 intro-math.frameCamera 按可用矩形反算，任何画幅不裁切
+ * - 文字是 HTML 覆盖层（逐字 clip-path），不是 3D 文字
+ */
+
+const THREE = __require("vendor/three.module.js");
+const { EffectComposer } = __require("vendor/three-addons/postprocessing/EffectComposer.js");
+const { RenderPass } = __require("vendor/three-addons/postprocessing/RenderPass.js");
+const { UnrealBloomPass } = __require("vendor/three-addons/postprocessing/UnrealBloomPass.js");
+const { OutputPass } = __require("vendor/three-addons/postprocessing/OutputPass.js");
+const { INTRO_DURATION, easeInOutCubic, easeOutCubic, clamp01, progress, burstOffset, starPulse, dustRadius, dustSpin, dustPoint, DUST_TILT, frameCamera, letterProgress, TEXT_LETTER_DELAY } = __require("js/intro-math.js");
+
+const GOLD = { r: 1.0, g: 0.79, b: 0.44 };
+
+const VERT = /* glsl */ `
+  attribute vec3 aColor;
+  attribute float aSize;
+  uniform float uPointScale;
+  uniform float uBright;
+  uniform float uMix;
+  uniform float uSizeScale;
+  varying vec3 vColor;
+  varying float vAlpha;
+
+  void main() {
+    vec4 mv = modelViewMatrix * vec4(position, 1.0);
+    gl_Position = projectionMatrix * mv;
+    gl_PointSize = clamp(aSize * uSizeScale * uPointScale / max(0.06, -mv.z), 1.0, 128.0);
+
+    vec3 gold = vec3(${GOLD.r.toFixed(3)}, ${GOLD.g.toFixed(3)}, ${GOLD.b.toFixed(3)});
+    vColor = mix(gold, aColor, uMix) * uBright;
+    vAlpha = 1.0;
+  }
+`;
+
+const FRAG = /* glsl */ `
+  varying vec3 vColor;
+  varying float vAlpha;
+  void main() {
+    vec2 d = gl_PointCoord - vec2(0.5);
+    float dist = length(d);
+    if (dist > 0.5) discard;
+    float falloff = smoothstep(0.5, 0.02, dist);
+    gl_FragColor = vec4(vColor, falloff * vAlpha);
+  }
+`;
+
+class IntroSequence {
+  constructor({ shape, cfg, renderer }) {
+    this.cfg = cfg;
+    this.renderer = renderer;
+    this.time = 0;
+    this.done = false;
+    this.skipped = false;
+
+    this.count = cfg.count;
+    this.scene = new THREE.Scene();
+    this.scene.background = new THREE.Color(0x000000);
+
+    this._buildParticles(shape);
+    this._buildFireworks();
+    this._buildCamera(shape);
+    this._buildComposer();
+    this._buildOverlays();
+  }
+
+  // ---------------------------------------------------------------- 粒子
+
+  _buildParticles(shape) {
+    const n = this.count;
+    const { height, floorY, baseRadius } = shape;
+
+    this.dust = new Float32Array(n * 4);   // angle, radiusFactor, thickness, spinOffset
+    this.tree = new Float32Array(n * 3);
+    this.burst = new Float32Array(n * 3);
+    this.seed = new Float32Array(n);
+    this.heightFactor = new Float32Array(n);
+
+    const positions = new Float32Array(n * 3);
+    const colors = new Float32Array(n * 3);
+    const sizes = new Float32Array(n);
+
+    const palette = [
+      [0.12, 0.55, 0.34],
+      [0.18, 0.75, 0.45],
+      [1.0, 0.82, 0.48],
+      [1.0, 0.23, 0.36],
+      [1.0, 1.0, 1.0],
+    ];
+
+    for (let i = 0; i < n; i++) {
+      const i3 = i * 3;
+
+      // --- 星尘盘 ---
+      this.dust[i * 4] = Math.random() * Math.PI * 2;
+      this.dust[i * 4 + 1] = 0.55 + Math.random() * 0.45;
+      this.dust[i * 4 + 2] = Math.random() - 0.5;   // 垂直抖动，预存，别每帧随机
+      this.dust[i * 4 + 3] = Math.random() * 0.4;
+
+      // --- 树位置：yf = 1 - sqrt(rand)，底部更密 ---
+      const yf = 1 - Math.sqrt(Math.random());
+      const t = 1 - yf;
+      const spiral = Math.random() < 0.32;
+      const angle = spiral
+        ? t * 6.5 * Math.PI * 2 + (Math.random() - 0.5) * 0.6
+        : Math.random() * Math.PI * 2;
+      const rFrac = spiral ? 0.86 + Math.random() * 0.22 : Math.pow(Math.random(), 0.6);
+      const r = shape.baseRadius * Math.pow(1 - t, 0.88) * rFrac * (0.9 + Math.random() * 0.2);
+
+      this.tree[i3] = Math.cos(angle) * r;
+      this.tree[i3 + 1] = floorY + height * t;
+      this.tree[i3 + 2] = Math.sin(angle) * r;
+      this.heightFactor[i] = t;
+
+      // --- 爆散方向：朝外，带一点朝镜头的 z ---
+      const len = Math.hypot(this.tree[i3], this.tree[i3 + 2]) || 1;
+      this.burst[i3] = this.tree[i3] / len;
+      this.burst[i3 + 1] = (Math.random() - 0.35) * 0.7;
+      this.burst[i3 + 2] = this.tree[i3 + 2] / len * 0.7 + 0.55;
+
+      this.seed[i] = Math.random() * 100;
+      sizes[i] = 0.7 + Math.random() * 0.9;
+
+      const c = palette[Math.floor(Math.random() * palette.length)];
+      colors[i3] = c[0];
+      colors[i3 + 1] = c[1];
+      colors[i3 + 2] = c[2];
+
+      // 初始就在星尘盘上
+      const p = dustPoint(
+        this.dust[i * 4],
+        dustRadius(0, baseRadius) * this.dust[i * 4 + 1],
+        0.6,
+        this.dust[i * 4 + 2],
+      );
+      positions[i3] = p.x;
+      positions[i3 + 1] = p.y;
+      positions[i3 + 2] = p.z;
+    }
+
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+    geo.setAttribute('aColor', new THREE.BufferAttribute(colors, 3));
+    geo.setAttribute('aSize', new THREE.BufferAttribute(sizes, 1));
+    geo.boundingSphere = new THREE.Sphere(new THREE.Vector3(), 80);
+
+    this.uniforms = {
+      uPointScale: { value: 900 },
+      uBright: { value: 1 },
+      uMix: { value: 0 },
+      uSizeScale: { value: 1 },
+    };
+
+    const mat = new THREE.ShaderMaterial({
+      uniforms: this.uniforms,
+      vertexShader: VERT,
+      fragmentShader: FRAG,
+      transparent: true,
+      blending: THREE.AdditiveBlending,
+      depthTest: false,
+      depthWrite: false,
+    });
+
+    this.points = new THREE.Points(geo, mat);
+    this.points.frustumCulled = false;
+    this.scene.add(this.points);
+    this.positions = positions;
+    this.geometry = geo;
+  }
+
+  _buildFireworks() {
+    const clusters = 5;
+    const perCluster = 90;
+    const total = clusters * perCluster;
+    const pos = new Float32Array(total * 3);
+    const colors = new Float32Array(total * 3).fill(1);
+    const sizes = new Float32Array(total).fill(1.6);
+
+    this.fire = {
+      clusters,
+      perCluster,
+      total,
+      pos,
+      vel: new Float32Array(total * 3),
+      life: new Float32Array(total),
+      geo: null,
+      points: null,
+    };
+
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+    geo.setAttribute('aColor', new THREE.BufferAttribute(colors, 3));
+    geo.setAttribute('aSize', new THREE.BufferAttribute(sizes, 1));
+    geo.boundingSphere = new THREE.Sphere(new THREE.Vector3(), 100);
+
+    const mat = new THREE.ShaderMaterial({
+      uniforms: this.uniforms,
+      vertexShader: VERT,
+      fragmentShader: FRAG,
+      transparent: true,
+      blending: THREE.AdditiveBlending,
+      depthTest: false,
+      depthWrite: false,
+    });
+
+    this.fire.geo = geo;
+    this.fire.points = new THREE.Points(geo, mat);
+    this.fire.points.frustumCulled = false;
+    this.fire.points.visible = false;
+    this.scene.add(this.fire.points);
+  }
+
+  _buildComposer() {
+    const { width, height } = this.renderer.getSize(new THREE.Vector2());
+    this.composer = new EffectComposer(this.renderer);
+    this.composer.addPass(new RenderPass(this.scene, this.camera));
+
+    const b = this.cfg.bloom;
+    this.bloom = new UnrealBloomPass(new THREE.Vector2(width, height), b.strength, b.radius, b.threshold);
+    this.composer.addPass(this.bloom);
+    this.composer.addPass(new OutputPass());
+  }
+
+  _buildCamera(shape) {
+    this.camera = new THREE.PerspectiveCamera(44, 1, 0.1, 400);
+    this.shape = shape;
+    this._refit();
+  }
+
+  _refit() {
+    const aspect = window.innerWidth / Math.max(window.innerHeight, 1);
+    const cam = frameCamera({
+      fov: 44,
+      aspect,
+      yMin: this.shape.floorY - 1,
+      yMax: this.shape.floorY + this.shape.height + 4,
+      halfW: this.shape.baseRadius * 1.25,
+    });
+    this.camera.aspect = aspect;
+    this.camera.position.set(0, cam.targetY, cam.distance);
+    this.camera.lookAt(0, cam.targetY, 0);
+    this.camera.updateProjectionMatrix();
+    this.baseDistance = cam.distance;
+    this.baseTargetY = cam.targetY;
+  }
+
+  // ---------------------------------------------------------------- 覆盖层
+
+  _buildOverlays() {
+    // 闪光层
+    this.flash = document.createElement('div');
+    this.flash.id = 'intro-flash';
+    document.body.appendChild(this.flash);
+
+    // 文字层
+    this.textWrap = document.createElement('div');
+    this.textWrap.id = 'intro-text';
+    this.textWrap.innerHTML = `
+      <div class="intro-merry"></div>
+      <div class="intro-cn">圣诞快乐</div>
+    `;
+    document.body.appendChild(this.textWrap);
+
+    const merry = this.textWrap.querySelector('.intro-merry');
+    const word = 'Merry Christmas';
+    this.letters = [];
+    for (const ch of word) {
+      const span = document.createElement('span');
+      span.textContent = ch === ' ' ? '\\u00a0' : ch;
+      span.className = 'intro-letter';
+      merry.appendChild(span);
+      this.letters.push(span);
+    }
+    this.cnLine = this.textWrap.querySelector('.intro-cn');
+  }
+
+  // ---------------------------------------------------------------- 帧更新
+
+  update(dt) {
+    if (this.done) return;
+    this.time += dt;
+    const t = this.time;
+
+    const shape = this.shape;
+    const n = this.count;
+    const pos = this.positions;
+
+    // --- 阶段参数 ---
+    const buildP = progress(t, 3.2, 5.6);
+    const explodeP = progress(t, 10.55, 12.1);
+    const rewindP = progress(t, 12.55, 14.6);
+    const compressP = progress(t, 10.3, 10.55);
+
+    this.uniforms.uMix.value = easeOutCubic(progress(t, 3.2, 5.4));
+    this.uniforms.uBright.value = this._brightness(t);
+    this.uniforms.uPointScale.value = this._pointScale();
+    this.uniforms.uSizeScale.value = this._sizeScale(t);
+
+    const spin = this._spinAccum(t);
+    const dustR = dustRadius(buildP, shape.baseRadius);
+
+    const burstLen = burstOffset(1);
+    const rewindEase = easeInOutCubic(rewindP);
+
+    for (let i = 0; i < n; i++) {
+      const i3 = i * 3;
+      const hf = this.heightFactor[i];
+
+      // 各阶段的"目标"位置
+      const dustP = dustPoint(
+        this.dust[i * 4] + spin + this.dust[i * 4 + 3],
+        dustR * this.dust[i * 4 + 1],
+        0.6,
+        this.dust[i * 4 + 2],
+      );
+
+      // 垒树：按高度分配延迟，底部先落位
+      const delay = hf * 0.55;
+      const localBuild = clamp01((buildP - delay) / (1 - 0.55));
+      const b = easeInOutCubic(localBuild);
+
+      // 多绕约一圈后落位
+      const extraTurn = (1 - b) * Math.PI * 2;
+      const cosA = Math.cos(extraTurn);
+      const sinA = Math.sin(extraTurn);
+      const tx = this.tree[i3] * cosA - this.tree[i3 + 2] * sinA;
+      const tz = this.tree[i3] * sinA + this.tree[i3 + 2] * cosA;
+
+      let x;
+      let y;
+      let z;
+      if (t < 3.2) {
+        x = dustP.x;
+        y = dustP.y;
+        z = dustP.z;
+      } else if (t < 10.55) {
+        x = dustP.x + (tx - dustP.x) * b;
+        y = dustP.y + (this.tree[i3 + 1] - dustP.y) * b;
+        z = dustP.z + (tz - dustP.z) * b;
+
+        if (compressP > 0) {
+          const k = 1 - 0.45 * easeInOutCubic(compressP);
+          x *= k;
+          y = (y - shape.floorY) * k + shape.floorY;
+          z *= k;
+        }
+      } else if (t < 12.55) {
+        // 爆散：位移 = burstOffset(e)，先缓后猛
+        const off = burstOffset(explodeP);
+        x = this.tree[i3] + this.burst[i3] * off;
+        y = this.tree[i3 + 1] + this.burst[i3 + 1] * off;
+        z = this.tree[i3 + 2] + this.burst[i3 + 2] * off;
+      } else {
+        // 回卷：从爆散终点旋回树形，角度衰减 1.25 rad
+        const off = burstLen * (1 - rewindEase);
+        const decay = 1.25 * (1 - rewindEase);
+        const bx = this.burst[i3] * Math.cos(decay) - this.burst[i3 + 2] * Math.sin(decay);
+        const bz = this.burst[i3] * Math.sin(decay) + this.burst[i3 + 2] * Math.cos(decay);
+        x = this.tree[i3] + bx * off;
+        y = this.tree[i3 + 1] + this.burst[i3 + 1] * off;
+        z = this.tree[i3 + 2] + bz * off;
+      }
+
+      pos[i3] = x;
+      pos[i3 + 1] = y;
+      pos[i3 + 2] = z;
+    }
+
+    this.geometry.attributes.position.needsUpdate = true;
+
+    this._updateFireworks(t);
+    this._updateCamera(t);
+    this._updateText(t);
+    this._updateFlash(t);
+
+    // 淡出黑场 → 循环 / 结束
+    const fade = progress(t, 15.1, 15.85);
+    this.flash.style.opacity = String(Math.max(this._flashValue(t), fade * 0.9));
+
+    if (t >= INTRO_DURATION) {
+      if (this.cfg.loop) {
+        this.time = 0;
+      } else {
+        this.done = true;
+      }
+    }
+  }
+
+  /** 爆散时粒子放大到 3.4 倍；回卷过程中收回 1 倍 */
+  _sizeScale(t) {
+    if (t < 10.55) return 1;
+    if (t < 12.1) return 1 + 2.4 * easeInOutCubic(progress(t, 10.55, 12.1));
+    if (t < 12.55) return 3.4;
+    return 3.4 - 2.4 * easeInOutCubic(progress(t, 12.55, 14.6));
+  }
+
+  _brightness(t) {
+    if (t < 5.6) return 1;
+    if (t < 6.2) return 1 + 2.2 * starPulse(t);
+    if (t < 8.4) return 1;
+    if (t < 10.3) return 0.62;               // 定格压亮度，防止加色过曝
+    if (t < 10.55) return 0.62 + 1.1 * easeInOutCubic(progress(t, 10.3, 10.55));
+    return 1.35;
+  }
+
+  _flashValue(t) {
+    const p = progress(t, 12.1, 12.55);
+    if (t < 12.1 || t > 12.55) return 0;
+    return Math.sin(p * Math.PI) * 0.92;
+  }
+
+  _spinAccum(t) {
+    // 转速随进度平方加快
+    const p = clamp01(t / 3.2);
+    return dustSpin(p) * Math.min(t, 3.2) * 0.5;
+  }
+
+  _pointScale() {
+    const tanV = Math.tan((this.camera.fov * Math.PI) / 360);
+    const dpr = this.renderer.getPixelRatio();
+    return (window.innerHeight * dpr * 0.12) / (2 * tanV);
+  }
+
+  _updateCamera(t) {
+    // 5.6–6.35 后拉 5%，12.05–12.55 震动 0.03
+    const dolly = 1 + 0.05 * Math.sin(clamp01(progress(t, 5.6, 6.35)) * Math.PI);
+    const shakeP = progress(t, 12.05, 12.55);
+    const shake = shakeP > 0 && shakeP < 1 ? 0.03 * Math.sin(shakeP * Math.PI) : 0;
+
+    this.camera.position.z = this.baseDistance * dolly;
+    this.camera.position.y = this.baseTargetY + Math.sin(t * 61) * shake;
+    this.camera.position.x = Math.cos(t * 47) * shake;
+    this.camera.lookAt(0, this.baseTargetY, 0);
+  }
+
+  _updateText(t) {
+    const start = 6.35;
+    const fadeOut = progress(t, 11.6, 12.05);
+    this.textWrap.style.opacity = String(1 - fadeOut);
+
+    const show = t >= start - 0.1 && t < 12.1;
+    this.textWrap.style.visibility = show ? 'visible' : 'hidden';
+
+    for (let i = 0; i < this.letters.length; i++) {
+      const p = letterProgress(t, i, start);
+      this.letters[i].style.clipPath = p >= 1 ? 'inset(0 -14% 0 0)' : `inset(0 ${(1 - p) * 100}% 0 0)`;
+    }
+    const cnP = letterProgress(t, 0, start + 0.9);
+    this.cnLine.style.opacity = String(clamp01(cnP));
+  }
+
+  _updateFireworks(t) {
+    const f = this.fire;
+    const start = 6.2;
+    const end = 8.4;
+    if (t < start || t > end + 1.4) {
+      f.points.visible = false;
+      return;
+    }
+    f.points.visible = true;
+
+    // 5 簇，左右交替，每 0.44s 一簇
+    for (let c = 0; c < f.clusters; c++) {
+      const born = start + c * 0.44;
+      const age = t - born;
+      const base = c * f.perCluster;
+      if (age < 0) {
+        for (let k = 0; k < f.perCluster; k++) f.pos[(base + k) * 3 + 1] = -999;
+        continue;
+      }
+      const side = c % 2 === 0 ? -1 : 1;
+      const cx = side * (4 + (c * 2.1) % 5);
+      const cy = 6 + (c % 3) * 3.2;
+
+      for (let k = 0; k < f.perCluster; k++) {
+        const idx = (base + k) * 3;
+        if (age < 0.02) {
+          const phi = Math.acos(2 * Math.random() - 1);
+          const th = Math.random() * Math.PI * 2;
+          const sp = 3.2 + Math.random() * 4.2;
+          f.vel[idx] = Math.sin(phi) * Math.cos(th) * sp;
+          f.vel[idx + 1] = Math.cos(phi) * sp * 0.85;
+          f.vel[idx + 2] = Math.sin(phi) * Math.sin(th) * sp;
+        }
+        const spread = 1 - Math.exp(-3.2 * age);
+        f.pos[idx] = cx + f.vel[idx] * spread * age * 1.1;
+        f.pos[idx + 1] = cy + f.vel[idx + 1] * spread * age - 4.5 * age * age;
+        f.pos[idx + 2] = f.vel[idx + 2] * spread * age;
+      }
+    }
+    f.geo.attributes.position.needsUpdate = true;
+  }
+
+  // ---------------------------------------------------------------- 渲染
+
+  render() {
+    this.composer.render();
+  }
+
+  resize() {
+    this._refit();
+    const { width, height } = this.renderer.getSize(new THREE.Vector2());
+    this.composer.setSize(width, height);
+  }
+
+  dispose() {
+    this.scene.remove(this.points);
+    this.geometry.dispose();
+    this.points.material.dispose();
+    this.composer.dispose?.();
+    this.flash.remove();
+    this.textWrap.remove();
+  }
+}
+
+__exports["IntroSequence"] = IntroSequence;
   };
   __defs["vendor/three.module.js"] = function (__require, __exports) {
 /**
@@ -57640,6 +58313,176 @@ function placeOrnaments({
 
 __exports["makeScatterPoint"] = makeScatterPoint;
 __exports["placeOrnaments"] = placeOrnaments;
+  };
+  __defs["js/intro-math.js"] = function (__require, __exports) {
+/**
+ * 开场动画的数学层（纯函数，无 three.js 依赖，可单测）。
+ *
+ * 规格来自 `02-开场动画-提示词.md`：
+ * - 16 秒时间轴，缓动统一 easeInOutCubic / easeOutCubic
+ * - 爆散位移 = 0.5e + 3.7·e^2.1
+ * - 取景按"可用矩形"反算距离并取 max，保证任何画幅都不裁切
+ */
+
+const INTRO_DURATION = 16;
+
+// ---------------------------------------------------------------- 缓动
+
+const easeOutCubic = (x) => 1 - Math.pow(1 - Math.min(Math.max(x, 0), 1), 3);
+
+const easeInOutCubic = (x) => {
+  const t = Math.min(Math.max(x, 0), 1);
+  return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
+};
+
+const clamp01 = (x) => Math.min(Math.max(x, 0), 1);
+
+/** 把绝对时间映射到某个区间的 0~1 进度 */
+function progress(t, start, end) {
+  if (end <= start) return t >= end ? 1 : 0;
+  return clamp01((t - start) / (end - start));
+}
+
+// ---------------------------------------------------------------- 爆散与星芒
+
+/** 爆散位移曲线：先缓后猛（e 是 0~1 的爆散进度） */
+function burstOffset(e) {
+  const p = clamp01(e);
+  return 0.5 * p + 3.7 * Math.pow(p, 2.1);
+}
+
+/** 塔尖星芒脉冲：中心 5.85s，σ=0.30 的高斯 */
+function starPulse(t, center = 5.85, sigma = 0.3) {
+  const d = (t - center) / sigma;
+  return Math.exp(-0.5 * d * d);
+}
+
+/** 定格段亮度（加色混合必须压到 0.62，否则过曝成白） */
+function freezeBrightness(phase, lo = 0.62, hi = 1) {
+  return lo + (hi - lo) * (1 - clamp01(phase));
+}
+
+// ---------------------------------------------------------------- 取景
+
+/**
+ * 按"可用矩形"反算相机距离。
+ *
+ * rect：树在画面中允许占据的纵向区间（0 顶 / 1 底）。
+ * 顶部留白 6%、底部留出 20% 给文字区 —— 所以底边是 0.80，rectH = 0.74。
+ * （规格里写的 "rectTop=0.06，rectBottom=0.20" 指的是"上下留白"，不是区间端点）
+ *
+ * 关键：d 取宽、高两个约束的 max —— 只按高度算，横屏会裁左右；
+ * 只按宽度算，竖屏会裁上下。
+ */
+function frameCamera({
+  fov = 44,
+  aspect = 1,
+  yMin,
+  yMax,
+  halfW,
+  rectTop = 0.06,
+  bottomMargin = 0.2,
+  heightPad = 1.04,
+  widthPad = 1.02,
+}) {
+  const tanV = Math.tan((fov * Math.PI) / 360);
+  const rectBottom = 1 - bottomMargin;
+  const rectH = rectBottom - rectTop;
+  const rectCy = (rectTop + rectBottom) / 2;
+
+  const halfH = (yMax - yMin) / 2;
+  const centreY = (yMax + yMin) / 2;
+
+  const dHeight = (halfH * heightPad) / (rectH * tanV);
+  const dWidth = (halfW * widthPad) / (0.92 * tanV * Math.max(aspect, 1e-3));
+  const distance = Math.max(dHeight, dWidth);
+
+  const viewH = 2 * distance * tanV;
+  const targetY = centreY - (0.5 - rectCy) * viewH;
+
+  return { distance, targetY, viewH, tanV, rectH, rectCy };
+}
+
+/** 把世界坐标点投影成 NDC（测试用，验证"不裁切"） */
+function projectToNdc(p, camera) {
+  const { distance, targetY, tanV, aspect } = camera;
+  const dz = distance - p.z;          // 相机在 +z 看向原点
+  if (dz <= 0) return { x: 0, y: 0, visible: false };
+  const ndcX = p.x / (dz * tanV * aspect);
+  const ndcY = (p.y - targetY) / (dz * tanV);
+  return { x: ndcX, y: ndcY, visible: Math.abs(ndcX) <= 1 && Math.abs(ndcY) <= 1 };
+}
+
+// ---------------------------------------------------------------- 星尘盘
+
+/** 星尘盘倾斜（弧度）：不倾斜的话正对镜头会看成一条线 */
+const DUST_TILT = (17 * Math.PI) / 180;
+
+/**
+ * 星尘盘半径随进度收缩到 1.5×树底半径。
+ * 起点不能写死 6：树缩放后可能比 6 小，会变成"越聚越散"。
+ * 用 2.2× 树底半径作起点，保证任何树尺寸下都一定是收缩。
+ */
+function dustRadius(p, baseRadius) {
+  const from = Math.max(6, baseRadius * 2.2);
+  const to = baseRadius * 1.5;
+  const k = Math.min(1, (to / Math.max(from, 1e-6)));
+  // from → to 的插值（from 更大时是收缩）
+  return from + (to - from) * easeInOutCubic(clamp01(p));
+}
+
+/** 星尘盘转速：随进度平方加快 */
+function dustSpin(p, base = 0.6) {
+  const e = clamp01(p);
+  return base + 2.6 * e * e;
+}
+
+/**
+ * 在倾斜盘上取一点（带垂直厚度，避免看成一条线）。
+ *
+ * yJitter 必须由调用方预存 —— 这里如果用 Math.random()，
+ * 每帧都会重新随机，星尘会逐帧乱跳（这个坑踩过）。
+ */
+function dustPoint(angle, radius, thickness = 0.5, yJitter = 0) {
+  const x = Math.cos(angle) * radius;
+  const z0 = Math.sin(angle) * radius;
+  const y0 = yJitter * thickness;
+  // 绕 X 轴倾斜 17°
+  return {
+    x,
+    y: y0 * Math.cos(DUST_TILT) - z0 * Math.sin(DUST_TILT),
+    z: y0 * Math.sin(DUST_TILT) + z0 * Math.cos(DUST_TILT),
+  };
+}
+
+// ---------------------------------------------------------------- 文字
+
+/** 逐字书写：每字母延迟 62ms，时长 460ms */
+const TEXT_LETTER_DELAY = 0.062;
+const TEXT_LETTER_DURATION = 0.46;
+
+function letterProgress(t, index, start = 6.35) {
+  const local = t - start - index * TEXT_LETTER_DELAY;
+  return clamp01(local / TEXT_LETTER_DURATION);
+}
+
+__exports["progress"] = progress;
+__exports["burstOffset"] = burstOffset;
+__exports["starPulse"] = starPulse;
+__exports["freezeBrightness"] = freezeBrightness;
+__exports["frameCamera"] = frameCamera;
+__exports["projectToNdc"] = projectToNdc;
+__exports["dustRadius"] = dustRadius;
+__exports["dustSpin"] = dustSpin;
+__exports["dustPoint"] = dustPoint;
+__exports["letterProgress"] = letterProgress;
+__exports["INTRO_DURATION"] = INTRO_DURATION;
+__exports["easeOutCubic"] = easeOutCubic;
+__exports["easeInOutCubic"] = easeInOutCubic;
+__exports["clamp01"] = clamp01;
+__exports["DUST_TILT"] = DUST_TILT;
+__exports["TEXT_LETTER_DELAY"] = TEXT_LETTER_DELAY;
+__exports["TEXT_LETTER_DURATION"] = TEXT_LETTER_DURATION;
   };
   __defs["vendor/three-addons/shaders/CopyShader.js"] = function (__require, __exports) {
 /**

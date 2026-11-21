@@ -60,6 +60,14 @@ export const CONFIG = {
     holdTime: 0.3,     // 手势保持多久才切换形态（秒），防止误触
   },
 
+  intro: {
+    enabled: true,
+    count: 17000,          // 桌面粒子数；手机上 main.js 会降到 9000
+    loop: false,           // 播完进入交互模式；设 true 会一直循环
+    bloom: { strength: 0.92, radius: 0.7, threshold: 0.3 },
+    mobileBloom: { strength: 0.74, radius: 0.7, threshold: 0.3 },
+  },
+
   ribbon: {
     count: 9000,          // 规格 8000~12000；手机上会在 main.js 里降到 5000
     colorA: 0xa8e6ff,     // 冰蓝（想跟主体融合可换成 0xffd9a0 香槟金）
