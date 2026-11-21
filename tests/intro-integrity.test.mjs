@@ -51,3 +51,15 @@ test('开场：按 R 能重播（重播要重建序列，不能复用已 done �
   assert.ok(main.includes('mountIntro()'), '重播没有重建序列');
   assert.ok(main.includes('intro.dispose()'), '重播前没有释放旧序列');
 });
+
+test('开场：手机上也能重播，且开场时底部面板让位', () => {
+  const main = fs.readFileSync(path.join(root, 'js/main.js'), 'utf8');
+  const html = fs.readFileSync(path.join(root, 'index.html'), 'utf8');
+  const css = fs.readFileSync(path.join(root, 'css/app.css'), 'utf8');
+  assert.ok(html.includes('id="replay-btn"'), '缺少可点的重播按钮');
+  assert.ok(main.includes('els.replay?.addEventListener'), '重播按钮没绑定');
+  assert.ok(main.includes("classList.add('intro-on')"), '开场时没给 body 加 intro-on');
+  assert.ok(css.includes('body.intro-on #legend'), '开场时底部说明没让位，手机上会压字');
+  assert.ok(/min-height:\s*44px/.test(css), '触控目标不足 44px');
+  assert.ok(css.includes('env(safe-area-inset-top'), '手机面板没避开刘海安全区');
+});

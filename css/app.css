@@ -73,6 +73,10 @@ body.ui-hidden #tools,
 body.ui-hidden #cam-panel,
 body.ui-hidden #debug { opacity: 0; pointer-events: none; }
 
+/* 开场播放时把底部面板收起来：手机上文字就在底部，不收会叠在一起 */
+body.intro-on #legend,
+body.intro-on #cam-panel { opacity: 0; pointer-events: none; }
+
 #hud, #legend, #tools, #cam-panel, #debug { transition: opacity 0.35s ease; }
 
 /* ------------------------------------------------- HUD */
@@ -127,7 +131,9 @@ body.ui-hidden #debug { opacity: 0; pointer-events: none; }
   color: var(--gold);
   font-size: 12.5px;
   letter-spacing: 0.06em;
+  font-family: inherit;
   cursor: pointer;
+  touch-action: manipulation;
   transition: background 0.2s, transform 0.2s;
   user-select: none;
 }
@@ -300,18 +306,36 @@ body.ui-hidden #debug { opacity: 0; pointer-events: none; }
 
 /* ------------------------------------------------- 手机上再收紧一点 */
 @media (max-width: 720px), (pointer: coarse) {
-  #hud { top: 12px; left: 12px; padding: 10px 14px; min-width: 0; }
+  /* 刘海/圆角屏：面板整体让开安全区，别被裁掉 */
+  #hud {
+    top: calc(12px + env(safe-area-inset-top, 0px));
+    left: calc(12px + env(safe-area-inset-left, 0px));
+    padding: 10px 14px; min-width: 0;
+  }
   .brand { margin-bottom: 6px; }
   .brand-name { font-size: 13px; letter-spacing: 0.18em; }
   .hud-row { font-size: 11.5px; line-height: 1.7; gap: 10px; }
-  #tools { top: 12px; right: 12px; padding: 8px; gap: 6px; }
-  .btn { padding: 10px 13px; font-size: 12px; }  /* 手指点得准一点 */
+  #tools {
+    top: calc(12px + env(safe-area-inset-top, 0px));
+    right: calc(12px + env(safe-area-inset-right, 0px));
+    padding: 8px; gap: 6px;
+  }
+  /* 手指点得准一点：44px 是 iOS/Android 的最小推荐触控高度 */
+  .btn { padding: 10px 13px; font-size: 12px; min-height: 44px; }
   /* 手机上说明不能藏：很多人不知道能拖 */
-  #legend { left: 10px; bottom: 10px; right: auto; padding: 8px 12px; max-width: 208px; }
+  #legend {
+    left: calc(10px + env(safe-area-inset-left, 0px));
+    bottom: calc(10px + env(safe-area-inset-bottom, 0px));
+    right: auto; padding: 8px 12px; max-width: 208px;
+  }
   .legend-title { font-size: 9.5px; margin-bottom: 4px; letter-spacing: 0.18em; }
   #legend li { font-size: 10.5px; line-height: 1.6; }
   .legend-foot { display: none; }
-  #cam-panel { width: 112px; right: 10px; bottom: 10px; padding: 6px; }
+  #cam-panel {
+    width: 112px; padding: 6px;
+    right: calc(10px + env(safe-area-inset-right, 0px));
+    bottom: calc(10px + env(safe-area-inset-bottom, 0px));
+  }
   #debug { font-size: 10px; bottom: 10px; max-width: 92vw; }
   #toast { top: 74px; font-size: 12px; }
 }

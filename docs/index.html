@@ -83,6 +83,10 @@ body.ui-hidden #tools,
 body.ui-hidden #cam-panel,
 body.ui-hidden #debug { opacity: 0; pointer-events: none; }
 
+/* 开场播放时把底部面板收起来：手机上文字就在底部，不收会叠在一起 */
+body.intro-on #legend,
+body.intro-on #cam-panel { opacity: 0; pointer-events: none; }
+
 #hud, #legend, #tools, #cam-panel, #debug { transition: opacity 0.35s ease; }
 
 /* ------------------------------------------------- HUD */
@@ -137,7 +141,9 @@ body.ui-hidden #debug { opacity: 0; pointer-events: none; }
   color: var(--gold);
   font-size: 12.5px;
   letter-spacing: 0.06em;
+  font-family: inherit;
   cursor: pointer;
+  touch-action: manipulation;
   transition: background 0.2s, transform 0.2s;
   user-select: none;
 }
@@ -310,18 +316,36 @@ body.ui-hidden #debug { opacity: 0; pointer-events: none; }
 
 /* ------------------------------------------------- 手机上再收紧一点 */
 @media (max-width: 720px), (pointer: coarse) {
-  #hud { top: 12px; left: 12px; padding: 10px 14px; min-width: 0; }
+  /* 刘海/圆角屏：面板整体让开安全区，别被裁掉 */
+  #hud {
+    top: calc(12px + env(safe-area-inset-top, 0px));
+    left: calc(12px + env(safe-area-inset-left, 0px));
+    padding: 10px 14px; min-width: 0;
+  }
   .brand { margin-bottom: 6px; }
   .brand-name { font-size: 13px; letter-spacing: 0.18em; }
   .hud-row { font-size: 11.5px; line-height: 1.7; gap: 10px; }
-  #tools { top: 12px; right: 12px; padding: 8px; gap: 6px; }
-  .btn { padding: 10px 13px; font-size: 12px; }  /* 手指点得准一点 */
+  #tools {
+    top: calc(12px + env(safe-area-inset-top, 0px));
+    right: calc(12px + env(safe-area-inset-right, 0px));
+    padding: 8px; gap: 6px;
+  }
+  /* 手指点得准一点：44px 是 iOS/Android 的最小推荐触控高度 */
+  .btn { padding: 10px 13px; font-size: 12px; min-height: 44px; }
   /* 手机上说明不能藏：很多人不知道能拖 */
-  #legend { left: 10px; bottom: 10px; right: auto; padding: 8px 12px; max-width: 208px; }
+  #legend {
+    left: calc(10px + env(safe-area-inset-left, 0px));
+    bottom: calc(10px + env(safe-area-inset-bottom, 0px));
+    right: auto; padding: 8px 12px; max-width: 208px;
+  }
   .legend-title { font-size: 9.5px; margin-bottom: 4px; letter-spacing: 0.18em; }
   #legend li { font-size: 10.5px; line-height: 1.6; }
   .legend-foot { display: none; }
-  #cam-panel { width: 112px; right: 10px; bottom: 10px; padding: 6px; }
+  #cam-panel {
+    width: 112px; padding: 6px;
+    right: calc(10px + env(safe-area-inset-right, 0px));
+    bottom: calc(10px + env(safe-area-inset-bottom, 0px));
+  }
   #debug { font-size: 10px; bottom: 10px; max-width: 92vw; }
   #toast { top: 74px; font-size: 12px; }
 }
@@ -532,6 +556,9 @@ body.ui-hidden #debug { opacity: 0; pointer-events: none; }
       <span>＋</span> 加照片
       <input id="file-input" type="file" accept="image/*" multiple hidden />
     </label>
+    <button class="btn" id="replay-btn" type="button" title="重播开场动画（电脑上按 R 也可以）">
+      <span>↻</span> 重播
+    </button>
     <div class="hint-mini">按 H 隐藏界面 · 空格撒花 · R 重播开场</div>
   </div>
 
@@ -543,7 +570,7 @@ body.ui-hidden #debug { opacity: 0; pointer-events: none; }
       <li><b>手靠近镜头</b> 拉近，远离拉远</li>
       <li><b>五指张开</b> 散开 · <b>握拳</b> 合拢</li>
       <li><b>拇指食指捏合</b> 撒一把金粒子</li>
-      <li><b>按 R</b> 重播开场动画</li>
+      <li><b>点 ↻</b> 重播开场</li>
     </ul>
     <div class="legend-foot">没有摄像头？鼠标拖拽 + 滚轮同样能玩</div>
   </div>
@@ -567,7 +594,7 @@ body.ui-hidden #debug { opacity: 0; pointer-events: none; }
 
   <div id="toast"></div>
 
-  <script>window.__HOLO_NO_VENDOR__ = true; window.__HOLO_BUILD__ = "2026-11-21T19:53:19.489Z";</script>
+  <script>window.__HOLO_NO_VENDOR__ = true; window.__HOLO_BUILD__ = "2026-11-21T19:56:00.142Z";</script>
 <script>
 /* 由 tools/bundle.mjs 生成 —— 不要手改，改源码后重新构建 */
 (function () {
@@ -660,6 +687,7 @@ const els = {
   canvas: $('#cam-canvas'),
   camPanel: $('#cam-panel'),
   file: $('#file-input'),
+  replay: $('#replay-btn'),
   toast: $('#toast'),
 };
 
@@ -722,6 +750,7 @@ function startIntro() {
   introStarted = true;
   introHoldStart = 0;
   if (intro.skipButton) intro.skipButton.textContent = '跳过开场';
+  document.body.classList.add('intro-on');
   els.loader.classList.add('hidden');
   toast('开场开始');
 }
@@ -731,6 +760,7 @@ function endIntro() {
   intro.skipButton?.remove();
   intro.dispose();
   intro = null;
+  document.body.classList.remove('intro-on');
   els.loader.classList.add('hidden');
 }
 
@@ -750,6 +780,7 @@ function replayIntro() {
   } catch (err) {
     console.warn('[intro] 重播失败：', err);
     intro = null;
+    document.body.classList.remove('intro-on');
     toast('开场重播失败');
     return;
   }
@@ -758,6 +789,9 @@ function replayIntro() {
   startIntro();
   toast('重播开场');
 }
+
+// 手机上没键盘：右上角按钮点一下就能重播
+els.replay?.addEventListener('click', replayIntro);
 
 // ------------------------------------------------------------------ 照片聚焦
 // 照片不再用 DOM 弹层，而是把相框本身"拔"到镜头前（效果见 tree.js 的 focusPhoto）。

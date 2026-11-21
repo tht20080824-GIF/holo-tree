@@ -78,6 +78,7 @@ const els = {
   canvas: $('#cam-canvas'),
   camPanel: $('#cam-panel'),
   file: $('#file-input'),
+  replay: $('#replay-btn'),
   toast: $('#toast'),
 };
 
@@ -140,6 +141,7 @@ function startIntro() {
   introStarted = true;
   introHoldStart = 0;
   if (intro.skipButton) intro.skipButton.textContent = '跳过开场';
+  document.body.classList.add('intro-on');
   els.loader.classList.add('hidden');
   toast('开场开始');
 }
@@ -149,6 +151,7 @@ function endIntro() {
   intro.skipButton?.remove();
   intro.dispose();
   intro = null;
+  document.body.classList.remove('intro-on');
   els.loader.classList.add('hidden');
 }
 
@@ -168,6 +171,7 @@ function replayIntro() {
   } catch (err) {
     console.warn('[intro] 重播失败：', err);
     intro = null;
+    document.body.classList.remove('intro-on');
     toast('开场重播失败');
     return;
   }
@@ -176,6 +180,9 @@ function replayIntro() {
   startIntro();
   toast('重播开场');
 }
+
+// 手机上没键盘：右上角按钮点一下就能重播
+els.replay?.addEventListener('click', replayIntro);
 
 // ------------------------------------------------------------------ 照片聚焦
 // 照片不再用 DOM 弹层，而是把相框本身"拔"到镜头前（效果见 tree.js 的 focusPhoto）。
