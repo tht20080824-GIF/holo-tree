@@ -33,6 +33,7 @@ import {
   DUST_TILT_TARGET,
   letterProgress,
   TEXT_LETTER_DELAY,
+  TEXT_LETTER_DURATION,
 } from './intro-math.js';
 
 const T = {
@@ -368,19 +369,22 @@ export class IntroSequence {
 
     this.textWrap = document.createElement('div');
     this.textWrap.id = 'intro-text';
-    this.textWrap.innerHTML = '<div class="intro-merry"></div><div class="intro-cn">圣诞快乐</div>';
+    this.textWrap.innerHTML = '<div class="intro-silent"></div>'
+      + '<div class="intro-cn">圣诞节快乐</div>'
+      + '<div class="intro-sign">愿此夜长明</div>';
     document.body.appendChild(this.textWrap);
 
-    const merry = this.textWrap.querySelector('.intro-merry');
+    const silent = this.textWrap.querySelector('.intro-silent');
     this.letters = [];
-    for (const ch of 'Merry Christmas') {
+    for (const ch of 'Silent Night') {
       const span = document.createElement('span');
       span.textContent = ch === ' ' ? '\u00a0' : ch;
       span.className = 'intro-letter';
-      merry.appendChild(span);
+      silent.appendChild(span);
       this.letters.push(span);
     }
     this.cnLine = this.textWrap.querySelector('.intro-cn');
+    this.signLine = this.textWrap.querySelector('.intro-sign');
   }
 
   // ---------------------------------------------------------------- 每帧
@@ -613,7 +617,10 @@ export class IntroSequence {
       const p = letterProgress(t, i, start);
       this.letters[i].style.clipPath = p >= 1 ? 'inset(0 -14% 0 0)' : `inset(0 ${(1 - p) * 100}% 0 0)`;
     }
-    this.cnLine.style.opacity = String(clamp01(letterProgress(t, 0, start + 0.9)));
+    // 第一行写完之后再落第二、三行（+0.55s / +0.95s）
+    const firstLineEnd = start + (this.letters.length - 1) * TEXT_LETTER_DELAY + TEXT_LETTER_DURATION;
+    this.cnLine.style.opacity = String(letterProgress(t, 0, firstLineEnd + 0.55));
+    this.signLine.style.opacity = String(letterProgress(t, 0, firstLineEnd + 0.95));
   }
 
   _updateFireworks(t) {

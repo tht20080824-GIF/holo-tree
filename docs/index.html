@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
   <title>HOLO TREE · 手势圣诞树</title>
   <link rel="icon" href="data:," />
-  <link href="https://fonts.googleapis.com/css2?family=Great+Vibes&family=Noto+Serif+SC:wght@400;600&display=swap" rel="stylesheet" />
+  <link href="https://fonts.googleapis.com/css2?family=Italiana&family=Noto+Serif+SC:wght@400;600&display=swap" rel="stylesheet" />
   <meta name="description" content="用摄像头手势控制的 3D 粒子圣诞树" />
   <style>
 /* HOLO TREE — 全部样式，不依赖任何 CSS 框架 */
@@ -415,24 +415,21 @@ body.ui-hidden #debug { opacity: 0; pointer-events: none; }
   padding: 0 env(safe-area-inset-left, 0px);
 }
 
-.intro-merry {
-  font-family: 'Great Vibes', 'Snell Roundhand', 'Segoe Script', cursive;
-  font-size: clamp(26px, min(9vw, 6.2vh), 92px);
+.intro-silent {
+  font-family: 'Italiana', 'Didot', 'Bodoni 72', 'Times New Roman', serif;
+  font-size: clamp(26px, min(9.4vw, 6.4vh), 96px);
+  font-weight: 400;
   line-height: 1.15;
-  letter-spacing: 0.01em;
-  background: linear-gradient(178deg, #fff6d2 0%, #f5c86b 46%, #c68b2e 100%);
-  -webkit-background-clip: text;
-  background-clip: text;
-  color: transparent;
-  filter: drop-shadow(0 0 16px rgba(245, 200, 107, 0.55))
-          drop-shadow(0 0 44px rgba(245, 200, 107, 0.26));
+  letter-spacing: 0.055em;
   white-space: nowrap;
+  filter: drop-shadow(0 0 14px rgba(239, 200, 135, 0.52))
+          drop-shadow(0 0 38px rgba(185, 138, 60, 0.30));
 }
 
 /* 关键：background-clip 必须写在每个 span 上，只写父级会让整行文字不可见 */
 .intro-letter {
   display: inline-block;
-  background: linear-gradient(178deg, #fff6d2 0%, #f5c86b 46%, #c68b2e 100%);
+  background: linear-gradient(180deg, #FFF6DA 0%, #EFC887 60%, #B98A3C 100%);
   -webkit-background-clip: text;
   background-clip: text;
   color: transparent;
@@ -442,13 +439,23 @@ body.ui-hidden #debug { opacity: 0; pointer-events: none; }
 .intro-cn {
   margin-top: 0.5em;
   font-family: 'Noto Serif SC', 'Songti SC', 'STSong', serif;
-  font-size: clamp(10px, min(3.1vw, 2.05vh), 19px);
-  letter-spacing: 0.42em;
-  text-indent: 0.42em;
-  color: #f3d79a;
+  font-size: clamp(13px, min(4.1vw, 2.65vh), 24px);
+  letter-spacing: 0.38em;
+  text-indent: 0.38em;
+  color: #F0DDB4;
   opacity: 0;
-  transition: opacity 0.4s ease;
-  filter: drop-shadow(0 0 12px rgba(243, 215, 154, 0.45));
+  filter: drop-shadow(0 0 12px rgba(240, 221, 180, 0.40));
+}
+
+.intro-sign {
+  margin-top: 0.62em;
+  font-family: 'Noto Serif SC', 'Songti SC', 'STSong', serif;
+  font-size: clamp(9.5px, min(2.7vw, 1.7vh), 15px);
+  letter-spacing: 0.34em;
+  text-indent: 0.34em;
+  color: rgba(229, 200, 142, 0.78);
+  opacity: 0;
+  filter: drop-shadow(0 0 10px rgba(229, 200, 142, 0.28));
 }
 
 #intro-flash {
@@ -559,7 +566,7 @@ body.ui-hidden #debug { opacity: 0; pointer-events: none; }
 
   <div id="toast"></div>
 
-  <script>window.__HOLO_NO_VENDOR__ = true; window.__HOLO_BUILD__ = "2026-11-21T19:42:02.170Z";</script>
+  <script>window.__HOLO_NO_VENDOR__ = true; window.__HOLO_BUILD__ = "2026-11-21T19:48:56.221Z";</script>
 <script>
 /* 由 tools/bundle.mjs 生成 —— 不要手改，改源码后重新构建 */
 (function () {
@@ -2878,7 +2885,7 @@ const { RenderPass } = __require("vendor/three-addons/postprocessing/RenderPass.
 const { UnrealBloomPass } = __require("vendor/three-addons/postprocessing/UnrealBloomPass.js");
 const { OutputPass } = __require("vendor/three-addons/postprocessing/OutputPass.js");
 
-const { INTRO_DURATION, easeInOutCubic, easeOutCubic, clamp01, progress, burstOffset, starPulse, frameCamera, fitDustRadius, dustTiltAt, DUST_TILT_TARGET, letterProgress, TEXT_LETTER_DELAY } = __require("js/intro-math.js");
+const { INTRO_DURATION, easeInOutCubic, easeOutCubic, clamp01, progress, burstOffset, starPulse, frameCamera, fitDustRadius, dustTiltAt, DUST_TILT_TARGET, letterProgress, TEXT_LETTER_DELAY, TEXT_LETTER_DURATION } = __require("js/intro-math.js");
 
 const T = {
   gatherEnd: 3.2,
@@ -3213,19 +3220,22 @@ class IntroSequence {
 
     this.textWrap = document.createElement('div');
     this.textWrap.id = 'intro-text';
-    this.textWrap.innerHTML = '<div class="intro-merry"></div><div class="intro-cn">圣诞快乐</div>';
+    this.textWrap.innerHTML = '<div class="intro-silent"></div>'
+      + '<div class="intro-cn">圣诞节快乐</div>'
+      + '<div class="intro-sign">愿此夜长明</div>';
     document.body.appendChild(this.textWrap);
 
-    const merry = this.textWrap.querySelector('.intro-merry');
+    const silent = this.textWrap.querySelector('.intro-silent');
     this.letters = [];
-    for (const ch of 'Merry Christmas') {
+    for (const ch of 'Silent Night') {
       const span = document.createElement('span');
       span.textContent = ch === ' ' ? '\u00a0' : ch;
       span.className = 'intro-letter';
-      merry.appendChild(span);
+      silent.appendChild(span);
       this.letters.push(span);
     }
     this.cnLine = this.textWrap.querySelector('.intro-cn');
+    this.signLine = this.textWrap.querySelector('.intro-sign');
   }
 
   // ---------------------------------------------------------------- 每帧
@@ -3458,7 +3468,10 @@ class IntroSequence {
       const p = letterProgress(t, i, start);
       this.letters[i].style.clipPath = p >= 1 ? 'inset(0 -14% 0 0)' : `inset(0 ${(1 - p) * 100}% 0 0)`;
     }
-    this.cnLine.style.opacity = String(clamp01(letterProgress(t, 0, start + 0.9)));
+    // 第一行写完之后再落第二、三行（+0.55s / +0.95s）
+    const firstLineEnd = start + (this.letters.length - 1) * TEXT_LETTER_DELAY + TEXT_LETTER_DURATION;
+    this.cnLine.style.opacity = String(letterProgress(t, 0, firstLineEnd + 0.55));
+    this.signLine.style.opacity = String(letterProgress(t, 0, firstLineEnd + 0.95));
   }
 
   _updateFireworks(t) {
