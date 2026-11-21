@@ -1,12 +1,16 @@
 /**
- * 16 秒开场动画：星尘汇聚 → 螺旋垒树 → 塔尖炸光 → 烟花 + 文字 →
- * 定格 → 内收蓄力 → 爆散冲击 → 闪光 → 回卷重组 → 淡出循环。
+ * 16 秒开场动画（v2：按参考实现重写，主打「顺」）。
  *
- * 实现要点（对应 02-开场动画-提示词.md）：
- * - 单个 Points + 单个 BufferGeometry，一次 draw call
- * - 所有时间轴计算在 CPU 上做，只更新 position 属性，绝不重建几何体
- * - 取景用 intro-math.frameCamera 按可用矩形反算，任何画幅不裁切
- * - 文字是 HTML 覆盖层（逐字 clip-path），不是 3D 文字
+ * 上一版为什么不流畅：每帧对每颗粒子调用 dustPoint()——sin/cos/pow 各一次，
+ * 17000 颗就是 6.8 万次三角函数，加上逐帧上传 attribute，主线程直接被拖住。
+ *
+ * 这一版的做法（和参考实现一致）：
+ * - 预计算：每颗粒子的树坐标、星尘矢量、爆散方向全部在初始化时算好
+ * - 每帧只算「帧级」的三角函数（自转角、额外圈、回卷角），逐粒子只剩加减乘
+ * - 各阶段直接写回预存坐标，不做重复推导
+ * - 闪烁也放进顶点着色器（uTime + aSeed），CPU 不参与
+ *
+ * 主体元素用我们自己的：树高 24、树底半径 9、调色板（绿/金/红/白）。
  */
 
 import * as THREE from 'three';
@@ -14,6 +18,7 @@ import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
+
 import {
   INTRO_DURATION,
   easeInOutCubic,
@@ -22,35 +27,51 @@ import {
   progress,
   burstOffset,
   starPulse,
-  dustRadius,
-  dustSpin,
-  dustPoint,
-  DUST_TILT,
   frameCamera,
   letterProgress,
   TEXT_LETTER_DELAY,
 } from './intro-math.js';
 
-const GOLD = { r: 1.0, g: 0.79, b: 0.44 };
+const T = {
+  gatherEnd: 3.2,
+  riseEnd: 5.6,
+  flashEnd: 6.2,
+  showEnd: 8.4,
+  holdEnd: 10.3,
+  implodeEnd: 10.55,
+  burstEnd: 12.1,
+  blastEnd: 12.55,
+  returnEnd: 14.6,
+  hold2End: 15.1,
+  fadeEnd: 15.85,
+};
 
 const VERT = /* glsl */ `
   attribute vec3 aColor;
   attribute float aSize;
-  uniform float uPointScale;
-  uniform float uBright;
-  uniform float uMix;
+  attribute float aSeed;
+
+  uniform float uK;
   uniform float uSizeScale;
+  uniform float uMix;
+  uniform float uAlpha;
+  uniform float uBright;
+  uniform float uTime;
+
   varying vec3 vColor;
   varying float vAlpha;
 
   void main() {
     vec4 mv = modelViewMatrix * vec4(position, 1.0);
     gl_Position = projectionMatrix * mv;
-    gl_PointSize = clamp(aSize * uSizeScale * uPointScale / max(0.06, -mv.z), 1.0, 128.0);
 
-    vec3 gold = vec3(${GOLD.r.toFixed(3)}, ${GOLD.g.toFixed(3)}, ${GOLD.b.toFixed(3)});
-    vColor = mix(gold, aColor, uMix) * uBright;
-    vAlpha = 1.0;
+    float s = aSize * 0.0086 * uK / max(0.06, -mv.z);
+    gl_PointSize = clamp(s, 1.0, 110.0) * uSizeScale;
+
+    vec3 gold = vec3(1.0, 0.79, 0.44);
+    float tw = 0.88 + 0.12 * sin(uTime * 2.7 + aSeed * 43.0);
+    vColor = mix(gold, aColor, uMix) * uBright * tw;
+    vAlpha = uAlpha;
   }
 `;
 
@@ -58,11 +79,11 @@ const FRAG = /* glsl */ `
   varying vec3 vColor;
   varying float vAlpha;
   void main() {
-    vec2 d = gl_PointCoord - vec2(0.5);
-    float dist = length(d);
-    if (dist > 0.5) discard;
-    float falloff = smoothstep(0.5, 0.02, dist);
-    gl_FragColor = vec4(vColor, falloff * vAlpha);
+    vec2 uv = gl_PointCoord - 0.5;
+    float d = length(uv);
+    if (d > 0.5) discard;
+    float a = pow(max(0.0, 1.0 - d * 2.0), 2.2);
+    gl_FragColor = vec4(vColor, a * vAlpha);
   }
 `;
 
@@ -70,106 +91,134 @@ export class IntroSequence {
   constructor({ shape, cfg, renderer }) {
     this.cfg = cfg;
     this.renderer = renderer;
+    this.shape = shape;
     this.time = 0;
     this.done = false;
-    this.skipped = false;
 
     this.count = cfg.count;
     this.scene = new THREE.Scene();
     this.scene.background = new THREE.Color(0x000000);
 
+    // 树整体缓慢自转用这个 group，别直接转相机
+    this.world = new THREE.Group();
+    this.scene.add(this.world);
+
     this._buildParticles(shape);
     this._buildFireworks();
-    this._buildCamera(shape);
+    this._buildCamera();
     this._buildComposer();
     this._buildOverlays();
   }
 
-  // ---------------------------------------------------------------- 粒子
+  // ---------------------------------------------------------------- 预计算
 
   _buildParticles(shape) {
     const n = this.count;
     const { height, floorY, baseRadius } = shape;
 
-    this.dust = new Float32Array(n * 4);   // angle, radiusFactor, thickness, spinOffset
-    this.tree = new Float32Array(n * 3);
-    this.burst = new Float32Array(n * 3);
+    this.treeX = new Float32Array(n);
+    this.treeY = new Float32Array(n);
+    this.treeZ = new Float32Array(n);
+    this.dustX = new Float32Array(n);   // 单位矢量 × 半径（预旋转好的基准）
+    this.dustZ = new Float32Array(n);
+    this.dustY = new Float32Array(n);
+    this.bDir = new Float32Array(n * 3);
+    this.bScale = new Float32Array(n);
     this.seed = new Float32Array(n);
-    this.heightFactor = new Float32Array(n);
+    this.hf = new Float32Array(n);
 
     const positions = new Float32Array(n * 3);
     const colors = new Float32Array(n * 3);
     const sizes = new Float32Array(n);
+    const seeds = new Float32Array(n);
 
     const palette = [
-      [0.12, 0.55, 0.34],
-      [0.18, 0.75, 0.45],
-      [1.0, 0.82, 0.48],
-      [1.0, 0.23, 0.36],
-      [1.0, 1.0, 1.0],
+      { c: [0.12, 0.55, 0.34], w: 0.34 },
+      { c: [0.18, 0.75, 0.45], w: 0.26 },
+      { c: [1.0, 0.82, 0.48], w: 0.24 },
+      { c: [1.0, 0.23, 0.36], w: 0.11 },
+      { c: [1.0, 1.0, 1.0], w: 0.05 },
     ];
+    const acc = [];
+    let sum = 0;
+    for (const p of palette) { sum += p.w; acc.push(sum); }
+    const pickColor = () => {
+      const r = Math.random() * sum;
+      for (let i = 0; i < palette.length; i++) if (r <= acc[i]) return palette[i].c;
+      return palette[0].c;
+    };
+
+    const spins = 6.5;
 
     for (let i = 0; i < n; i++) {
       const i3 = i * 3;
 
-      // --- 星尘盘 ---
-      this.dust[i * 4] = Math.random() * Math.PI * 2;
-      this.dust[i * 4 + 1] = 0.55 + Math.random() * 0.45;
-      this.dust[i * 4 + 2] = Math.random() - 0.5;   // 垂直抖动，预存，别每帧随机
-      this.dust[i * 4 + 3] = Math.random() * 0.4;
+      // --- 树体：体积填充 + 螺旋光带 ---
+      const yf = 1 - Math.sqrt(Math.random());  // 底部更密
+      const coneR = baseRadius * (1 - yf * 0.965);
+      let ang;
+      let r;
+      if (Math.random() < 0.32) {
+        ang = yf * spins * Math.PI * 2 + (Math.random() - 0.5) * 0.55;
+        r = coneR * (0.86 + Math.random() * 0.22);
+      } else {
+        ang = Math.random() * Math.PI * 2;
+        r = coneR * (0.18 + 0.82 * Math.pow(Math.random(), 0.45));
+      }
+      if (Math.random() < 0.04) r *= 1.08 + Math.random() * 0.2;
 
-      // --- 树位置：yf = 1 - sqrt(rand)，底部更密 ---
-      const yf = 1 - Math.sqrt(Math.random());
-      const t = 1 - yf;
-      const spiral = Math.random() < 0.32;
-      const angle = spiral
-        ? t * 6.5 * Math.PI * 2 + (Math.random() - 0.5) * 0.6
-        : Math.random() * Math.PI * 2;
-      const rFrac = spiral ? 0.86 + Math.random() * 0.22 : Math.pow(Math.random(), 0.6);
-      const r = shape.baseRadius * Math.pow(1 - t, 0.88) * rFrac * (0.9 + Math.random() * 0.2);
+      this.treeX[i] = Math.cos(ang) * r;
+      this.treeZ[i] = Math.sin(ang) * r;
+      this.treeY[i] = floorY + yf * height + (Math.random() - 0.5) * 0.6;
+      this.hf[i] = yf;
 
-      this.tree[i3] = Math.cos(angle) * r;
-      this.tree[i3 + 1] = floorY + height * t;
-      this.tree[i3 + 2] = Math.sin(angle) * r;
-      this.heightFactor[i] = t;
+      // --- 星尘：预存「单位矢量 × 半径」，每帧只做一次全局旋转 ---
+      const dAng = Math.random() * Math.PI * 2;
+      const dR = baseRadius * (1.9 + Math.pow(Math.random(), 0.65) * 2.4);
+      this.dustX[i] = Math.cos(dAng) * dR;
+      this.dustZ[i] = Math.sin(dAng) * dR;
+      this.dustY[i] = (Math.random() - 0.5) * height * 0.09;
 
-      // --- 爆散方向：朝外，带一点朝镜头的 z ---
-      const len = Math.hypot(this.tree[i3], this.tree[i3 + 2]) || 1;
-      this.burst[i3] = this.tree[i3] / len;
-      this.burst[i3 + 1] = (Math.random() - 0.35) * 0.7;
-      this.burst[i3 + 2] = this.tree[i3 + 2] / len * 0.7 + 0.55;
+      // --- 爆散方向（略偏镜头） ---
+      const a = Math.random() * Math.PI * 2;
+      let dx = Math.cos(a) * 0.78;
+      let dy = (Math.random() - 0.42) * 0.62;
+      let dz = Math.sin(a) * 0.58 + (0.16 + Math.random() * 0.34);
+      const len = Math.hypot(dx, dy, dz) || 1;
+      this.bDir[i3] = dx / len;
+      this.bDir[i3 + 1] = dy / len;
+      this.bDir[i3 + 2] = dz / len;
+      this.bScale[i] = 0.65 + Math.random() * 1.55;
 
-      this.seed[i] = Math.random() * 100;
-      sizes[i] = 0.7 + Math.random() * 0.9;
+      this.seed[i] = Math.random();
+      seeds[i] = this.seed[i];
 
-      const c = palette[Math.floor(Math.random() * palette.length)];
+      const c = pickColor();
       colors[i3] = c[0];
       colors[i3 + 1] = c[1];
       colors[i3 + 2] = c[2];
 
-      // 初始就在星尘盘上
-      const p = dustPoint(
-        this.dust[i * 4],
-        dustRadius(0, baseRadius) * this.dust[i * 4 + 1],
-        0.6,
-        this.dust[i * 4 + 2],
-      );
-      positions[i3] = p.x;
-      positions[i3 + 1] = p.y;
-      positions[i3 + 2] = p.z;
+      sizes[i] = 0.82 + Math.random() * 1.25;
+
+      positions[i3] = this.dustX[i];
+      positions[i3 + 1] = this.dustY[i];
+      positions[i3 + 2] = this.dustZ[i];
     }
 
     const geo = new THREE.BufferGeometry();
     geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
     geo.setAttribute('aColor', new THREE.BufferAttribute(colors, 3));
     geo.setAttribute('aSize', new THREE.BufferAttribute(sizes, 1));
-    geo.boundingSphere = new THREE.Sphere(new THREE.Vector3(), 80);
+    geo.setAttribute('aSeed', new THREE.BufferAttribute(seeds, 1));
+    geo.boundingSphere = new THREE.Sphere(new THREE.Vector3(), 120);
 
     this.uniforms = {
-      uPointScale: { value: 900 },
-      uBright: { value: 1 },
-      uMix: { value: 0 },
+      uK: { value: 900 },
       uSizeScale: { value: 1 },
+      uMix: { value: 0 },
+      uAlpha: { value: 1 },
+      uBright: { value: 1 },
+      uTime: { value: 0 },
     };
 
     const mat = new THREE.ShaderMaterial({
@@ -184,35 +233,47 @@ export class IntroSequence {
 
     this.points = new THREE.Points(geo, mat);
     this.points.frustumCulled = false;
-    this.scene.add(this.points);
-    this.positions = positions;
+    this.world.add(this.points);
+
     this.geometry = geo;
+    this.positions = positions;
+
+    // 爆散的统一尺度：按树底半径换算，树缩放也跟着变
+    this.burstUnit = baseRadius * 1.15;
   }
 
   _buildFireworks() {
     const clusters = 5;
-    const perCluster = 90;
-    const total = clusters * perCluster;
-    const pos = new Float32Array(total * 3);
-    const colors = new Float32Array(total * 3).fill(1);
-    const sizes = new Float32Array(total).fill(1.6);
+    const per = 90;
+    const total = clusters * per;
 
-    this.fire = {
-      clusters,
-      perCluster,
-      total,
-      pos,
-      vel: new Float32Array(total * 3),
-      life: new Float32Array(total),
-      geo: null,
-      points: null,
-    };
+    const pos = new Float32Array(total * 3);
+    const colors = new Float32Array(total * 3);
+    const sizes = new Float32Array(total).fill(2.2);
+    const seeds = new Float32Array(total);
+    const dir = new Float32Array(total * 3);
+
+    for (let i = 0; i < total; i++) {
+      const i3 = i * 3;
+      const phi = Math.acos(2 * Math.random() - 1);
+      const th = Math.random() * Math.PI * 2;
+      const sp = 0.55 + Math.random() * 0.7;
+      dir[i3] = Math.sin(phi) * Math.cos(th) * sp;
+      dir[i3 + 1] = Math.cos(phi) * sp * 0.85;
+      dir[i3 + 2] = Math.sin(phi) * Math.sin(th) * sp;
+      colors[i3] = 1;
+      colors[i3 + 1] = 0.82;
+      colors[i3 + 2] = 0.5;
+      seeds[i] = Math.random();
+      pos[i3 + 1] = -999;
+    }
 
     const geo = new THREE.BufferGeometry();
     geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
     geo.setAttribute('aColor', new THREE.BufferAttribute(colors, 3));
     geo.setAttribute('aSize', new THREE.BufferAttribute(sizes, 1));
-    geo.boundingSphere = new THREE.Sphere(new THREE.Vector3(), 100);
+    geo.setAttribute('aSeed', new THREE.BufferAttribute(seeds, 1));
+    geo.boundingSphere = new THREE.Sphere(new THREE.Vector3(), 200);
 
     const mat = new THREE.ShaderMaterial({
       uniforms: this.uniforms,
@@ -224,11 +285,41 @@ export class IntroSequence {
       depthWrite: false,
     });
 
-    this.fire.geo = geo;
-    this.fire.points = new THREE.Points(geo, mat);
+    this.fire = {
+      clusters, per, total,
+      pos, dir,
+      geo,
+      points: new THREE.Points(geo, mat),
+      unit: this.shape.baseRadius * 0.55,
+    };
     this.fire.points.frustumCulled = false;
     this.fire.points.visible = false;
-    this.scene.add(this.fire.points);
+    this.world.add(this.fire.points);
+  }
+
+  // ---------------------------------------------------------------- 相机
+
+  _buildCamera() {
+    this.camera = new THREE.PerspectiveCamera(42, 1, 0.1, 400);
+    this._refit();
+  }
+
+  _refit() {
+    const { height, floorY, baseRadius } = this.shape;
+    const aspect = window.innerWidth / Math.max(window.innerHeight, 1);
+    const cam = frameCamera({
+      fov: 42,
+      aspect,
+      yMin: floorY - 1,
+      yMax: floorY + height + 3,
+      halfW: baseRadius * 1.2,
+    });
+    this.camera.aspect = aspect;
+    this.camera.position.set(0, cam.targetY, cam.distance);
+    this.camera.lookAt(0, cam.targetY, 0);
+    this.camera.updateProjectionMatrix();
+    this.baseDistance = cam.distance;
+    this.baseTargetY = cam.targetY;
   }
 
   _buildComposer() {
@@ -242,55 +333,25 @@ export class IntroSequence {
     this.composer.addPass(new OutputPass());
   }
 
-  _buildCamera(shape) {
-    this.camera = new THREE.PerspectiveCamera(44, 1, 0.1, 400);
-    this.shape = shape;
-    this._refit();
-  }
-
-  _refit() {
-    const aspect = window.innerWidth / Math.max(window.innerHeight, 1);
-    const cam = frameCamera({
-      fov: 44,
-      aspect,
-      yMin: this.shape.floorY - 1,
-      yMax: this.shape.floorY + this.shape.height + 4,
-      halfW: this.shape.baseRadius * 1.25,
-    });
-    this.camera.aspect = aspect;
-    this.camera.position.set(0, cam.targetY, cam.distance);
-    this.camera.lookAt(0, cam.targetY, 0);
-    this.camera.updateProjectionMatrix();
-    this.baseDistance = cam.distance;
-    this.baseTargetY = cam.targetY;
-  }
-
   // ---------------------------------------------------------------- 覆盖层
 
   _buildOverlays() {
-    // 闪光层
     this.flash = document.createElement('div');
     this.flash.id = 'intro-flash';
     document.body.appendChild(this.flash);
 
-    // 黑场淡出层（15.1–15.85s 淡入黑，形成无缝循环）
     this.fade = document.createElement('div');
     this.fade.id = 'intro-fade';
     document.body.appendChild(this.fade);
 
-    // 文字层
     this.textWrap = document.createElement('div');
     this.textWrap.id = 'intro-text';
-    this.textWrap.innerHTML = `
-      <div class="intro-merry"></div>
-      <div class="intro-cn">圣诞快乐</div>
-    `;
+    this.textWrap.innerHTML = '<div class="intro-merry"></div><div class="intro-cn">圣诞快乐</div>';
     document.body.appendChild(this.textWrap);
 
     const merry = this.textWrap.querySelector('.intro-merry');
-    const word = 'Merry Christmas';
     this.letters = [];
-    for (const ch of word) {
+    for (const ch of 'Merry Christmas') {
       const span = document.createElement('span');
       span.textContent = ch === ' ' ? '\u00a0' : ch;
       span.className = 'intro-letter';
@@ -300,97 +361,159 @@ export class IntroSequence {
     this.cnLine = this.textWrap.querySelector('.intro-cn');
   }
 
-  // ---------------------------------------------------------------- 帧更新
+  // ---------------------------------------------------------------- 每帧
 
   update(dt) {
     if (this.done) return;
     this.time += dt;
     const t = this.time;
+    this._step(t);
+  }
 
-    const shape = this.shape;
+  _step(t) {
     const n = this.count;
-    const pos = this.positions;
+    const P = this.positions;
+    const shape = this.shape;
 
-    // --- 阶段参数 ---
-    const buildP = progress(t, 3.2, 5.6);
-    const explodeP = progress(t, 10.55, 12.1);
-    const rewindP = progress(t, 12.55, 14.6);
-    const compressP = progress(t, 10.3, 10.55);
+    let sizeScale = 1;
+    let mix = 0;
+    let bright = 1;
+    let alpha = 1;
 
-    this.uniforms.uMix.value = easeOutCubic(progress(t, 3.2, 5.4));
-    this.uniforms.uBright.value = this._brightness(t);
-    this.uniforms.uPointScale.value = this._pointScale();
-    this.uniforms.uSizeScale.value = this._sizeScale(t);
+    // --- 帧级的三角函数，只算一次 ---
+    const spin = this._spin(t);                    // 星尘盘自转
+    const cs = Math.cos(spin);
+    const sn = Math.sin(spin);
 
-    const spin = this._spinAccum(t);
-    const dustR = dustRadius(buildP, shape.baseRadius);
-
-    const burstLen = burstOffset(1);
-    const rewindEase = easeInOutCubic(rewindP);
-
-    for (let i = 0; i < n; i++) {
-      const i3 = i * 3;
-      const hf = this.heightFactor[i];
-
-      // 各阶段的"目标"位置
-      const dustP = dustPoint(
-        this.dust[i * 4] + spin + this.dust[i * 4 + 3],
-        dustR * this.dust[i * 4 + 1],
-        0.6,
-        this.dust[i * 4 + 2],
-      );
-
-      // 垒树：按高度分配延迟，底部先落位
-      const delay = hf * 0.55;
-      const localBuild = clamp01((buildP - delay) / (1 - 0.55));
-      const b = easeInOutCubic(localBuild);
-
-      // 多绕约一圈后落位
-      const extraTurn = (1 - b) * Math.PI * 2;
-      const cosA = Math.cos(extraTurn);
-      const sinA = Math.sin(extraTurn);
-      const tx = this.tree[i3] * cosA - this.tree[i3 + 2] * sinA;
-      const tz = this.tree[i3] * sinA + this.tree[i3 + 2] * cosA;
-
-      let x;
-      let y;
-      let z;
-      if (t < 3.2) {
-        x = dustP.x;
-        y = dustP.y;
-        z = dustP.z;
-      } else if (t < 10.55) {
-        x = dustP.x + (tx - dustP.x) * b;
-        y = dustP.y + (this.tree[i3 + 1] - dustP.y) * b;
-        z = dustP.z + (tz - dustP.z) * b;
-
-        if (compressP > 0) {
-          const k = 1 - 0.45 * easeInOutCubic(compressP);
-          x *= k;
-          y = (y - shape.floorY) * k + shape.floorY;
-          z *= k;
-        }
-      } else if (t < 12.55) {
-        // 爆散：位移 = burstOffset(e)，先缓后猛
-        const off = burstOffset(explodeP);
-        x = this.tree[i3] + this.burst[i3] * off;
-        y = this.tree[i3 + 1] + this.burst[i3 + 1] * off;
-        z = this.tree[i3 + 2] + this.burst[i3 + 2] * off;
-      } else {
-        // 回卷：从爆散终点旋回树形，角度衰减 1.25 rad
-        const off = burstLen * (1 - rewindEase);
-        const decay = 1.25 * (1 - rewindEase);
-        const bx = this.burst[i3] * Math.cos(decay) - this.burst[i3 + 2] * Math.sin(decay);
-        const bz = this.burst[i3] * Math.sin(decay) + this.burst[i3 + 2] * Math.cos(decay);
-        x = this.tree[i3] + bx * off;
-        y = this.tree[i3 + 1] + this.burst[i3 + 1] * off;
-        z = this.tree[i3 + 2] + bz * off;
+    if (t < T.gatherEnd) {
+      // A. 星尘汇聚：收缩 + 自转，纯加减乘，无逐粒子三角函数
+      const p = t / T.gatherEnd;
+      const shrink = 1 - 0.42 * easeInOutCubic(p);
+      for (let i = 0; i < n; i++) {
+        const i3 = i * 3;
+        P[i3] = (this.dustX[i] * cs - this.dustZ[i] * sn) * shrink;
+        P[i3 + 1] = this.dustY[i] * (1 - 0.35 * p);
+        P[i3 + 2] = (this.dustX[i] * sn + this.dustZ[i] * cs) * shrink;
       }
+      mix = 0;
+      bright = 0.9 + 0.3 * p;
+    } else if (t < T.riseEnd) {
+      // B. 螺旋垒树：按高度分配延迟 + 全局额外旋转
+      const p = shiftProgress(t, T.gatherEnd, T.riseEnd);
+      const extra = (1 - easeOutCubic(p)) * Math.PI * 2;
+      const ce = Math.cos(extra);
+      const se = Math.sin(extra);
+      const shrink = 0.58;
 
-      pos[i3] = x;
-      pos[i3 + 1] = y;
-      pos[i3 + 2] = z;
+      for (let i = 0; i < n; i++) {
+        const i3 = i * 3;
+        const delay = this.hf[i] * 0.55;
+        const b = easeInOutCubic(clamp01((p - delay) / (1 - 0.55)));
+
+        const dx = (this.dustX[i] * cs - this.dustZ[i] * sn) * shrink;
+        const dz = (this.dustX[i] * sn + this.dustZ[i] * cs) * shrink;
+
+        // 先在水平面上多绕一点，再落位
+        const sx = dx * ce - dz * se;
+        const sz = dx * se + dz * ce;
+
+        P[i3] = sx + (this.treeX[i] - sx) * b;
+        P[i3 + 1] = this.dustY[i] + (this.treeY[i] - this.dustY[i]) * b;
+        P[i3 + 2] = sz + (this.treeZ[i] - sz) * b;
+      }
+      mix = easeOutCubic(clamp01((p - 0.55) / 0.45));
+      bright = 0.9 + 0.4 * (1 - p);
+    } else if (t < T.holdEnd) {
+      // C/D. 树形 + 星芒 + 烟花（位置就是预存的树坐标）
+      this._setTree();
+      mix = 1;
+      bright = 0.62;
+      if (t < T.flashEnd + 0.55) {
+        const f = starPulse(t);
+        if (f > 0.01) {
+          bright += f * 1.1;
+          mix = Math.max(mix, f * 0.85);
+        }
+      }
+      // 定格段缓慢自转交给 world 旋转
+      this.world.rotation.y += 0.0015;
+    } else if (t < T.implodeEnd) {
+      // E. 内收蓄力
+      const e = clamp01((t - T.holdEnd) / (T.implodeEnd - T.holdEnd));
+      const s = 1 - 0.45 * e * e;
+      for (let i = 0; i < n; i++) {
+        const i3 = i * 3;
+        P[i3] = this.treeX[i] * s;
+        P[i3 + 1] = this.treeY[i] * s;
+        P[i3 + 2] = this.treeZ[i] * s;
+      }
+      sizeScale = 1 + 0.18 * e;
+      bright = 1 + 0.5 * e;
+      mix = 1;
+    } else if (t < T.burstEnd) {
+      // F. 爆散冲击
+      const e = clamp01((t - T.implodeEnd) / (T.burstEnd - T.implodeEnd));
+      const d = burstOffset(e) * this.burstUnit;
+      for (let i = 0; i < n; i++) {
+        const i3 = i * 3;
+        const sc = this.bScale[i] * d;
+        P[i3] = this.treeX[i] * 0.55 + this.bDir[i3] * sc;
+        P[i3 + 1] = this.treeY[i] * 0.55 + this.bDir[i3 + 1] * sc;
+        P[i3 + 2] = this.treeZ[i] * 0.55 + this.bDir[i3 + 2] * sc;
+      }
+      sizeScale = 1 + 2.4 * Math.pow(e, 1.35);
+      bright = 1 + 0.5 * e;
+      alpha = 1 - clamp01((e - 0.72) / 0.28) * 0.85;
+      mix = 1;
+      if (e > 0.72) bright += (1 - clamp01((e - 0.72) / 0.28)) * 0.4;
+    } else if (t < T.blastEnd) {
+      // G. 闪光期：粒子隐没，交给覆盖层
+      this._setTree();
+      alpha = 0;
+      mix = 1;
+    } else if (t < T.returnEnd) {
+      // H. 回卷重组
+      const e = easeOutCubic(clamp01((t - T.blastEnd) / (T.returnEnd - T.blastEnd)));
+      const endD = burstOffset(1) * this.burstUnit;
+      const sw = (1 - e) * 1.25;
+      const cw = Math.cos(sw);
+      const sw2 = Math.sin(sw);
+
+      for (let i = 0; i < n; i++) {
+        const i3 = i * 3;
+        const sc = this.bScale[i] * endD;
+        const ex = this.treeX[i] * 0.55 + this.bDir[i3] * sc;
+        const ey = this.treeY[i] * 0.55 + this.bDir[i3 + 1] * sc;
+        const ez = this.treeZ[i] * 0.55 + this.bDir[i3 + 2] * sc;
+
+        const x = ex * (1 - e) + this.treeX[i] * e;
+        const z = ez * (1 - e) + this.treeZ[i] * e;
+
+        P[i3] = x * cw - z * sw2;
+        P[i3 + 1] = ey * (1 - e) + this.treeY[i] * e;
+        P[i3 + 2] = x * sw2 + z * cw;
+      }
+      sizeScale = 1 + 2.4 * (1 - e);
+      bright = 1;
+      alpha = clamp01(e * 1.6);
+      mix = 1;
+    } else {
+      // I. 定格 → 淡出
+      this._setTree();
+      mix = 1;
+      bright = 0.62;
     }
+
+    // 循环锚点：开头淡入、结尾淡出
+    const fadeOut = clamp01((t - (T.fadeEnd - 0.75)) / 0.75);
+    alpha *= clamp01(t / 0.55) * (1 - fadeOut);
+
+    this.uniforms.uSizeScale.value = sizeScale;
+    this.uniforms.uMix.value = mix;
+    this.uniforms.uAlpha.value = alpha;
+    this.uniforms.uBright.value = bright;
+    this.uniforms.uTime.value = t;
+    this.uniforms.uK.value = this._pointK();
 
     this.geometry.attributes.position.needsUpdate = true;
 
@@ -399,67 +522,44 @@ export class IntroSequence {
     this._updateText(t);
     this._updateFlash(t);
 
-    // 闪光 / 淡出黑场 → 循环 / 结束
-    this._updateFlash(t);
+    if (starPulse(t) > 0.02) this.world.rotation.y += 0.0006;
 
     if (t >= INTRO_DURATION) {
-      if (this.cfg.loop) {
-        this.time = 0;
-      } else {
-        this.done = true;
-      }
+      if (this.cfg.loop) this.time = 0;
+      else this.done = true;
     }
   }
 
-  /** 爆散时粒子放大到 3.4 倍；回卷过程中收回 1 倍 */
-  _sizeScale(t) {
-    if (t < 10.55) return 1;
-    if (t < 12.1) return 1 + 2.4 * easeInOutCubic(progress(t, 10.55, 12.1));
-    if (t < 12.55) return 3.4;
-    return 3.4 - 2.4 * easeInOutCubic(progress(t, 12.55, 14.6));
+  _setTree() {
+    const n = this.count;
+    const P = this.positions;
+    for (let i = 0; i < n; i++) {
+      const i3 = i * 3;
+      P[i3] = this.treeX[i];
+      P[i3 + 1] = this.treeY[i];
+      P[i3 + 2] = this.treeZ[i];
+    }
   }
 
-  _brightness(t) {
-    if (t < 5.6) return 1;
-    if (t < 6.2) return 1 + 2.2 * starPulse(t);
-    if (t < 8.4) return 1;
-    if (t < 10.3) return 0.62;               // 定格压亮度，防止加色过曝
-    if (t < 10.55) return 0.62 + 1.1 * easeInOutCubic(progress(t, 10.3, 10.55));
-    return 1.35;
-  }
-
-  _updateFlash(t) {
-    this.flash.style.opacity = String(this._flashValue(t));
-    this.fade.style.opacity = String(progress(t, 15.1, 15.85));
-  }
-
-  _flashValue(t) {
-    const p = progress(t, 12.1, 12.55);
-    if (t < 12.1 || t > 12.55) return 0;
-    return Math.sin(p * Math.PI) * 0.92;
-  }
-
-  _spinAccum(t) {
+  _spin(t) {
     // 转速随进度平方加快
-    const p = clamp01(t / 3.2);
-    return dustSpin(p) * Math.min(t, 3.2) * 0.5;
+    const p = clamp01(t / T.gatherEnd);
+    return (0.6 + 2.6 * p * p) * Math.min(t, T.gatherEnd) * 0.5;
   }
 
-  _pointScale() {
+  _pointK() {
     const tanV = Math.tan((this.camera.fov * Math.PI) / 360);
-    const dpr = this.renderer.getPixelRatio();
-    return (window.innerHeight * dpr * 0.12) / (2 * tanV);
+    return this.renderer.domElement.height / (2 * tanV);
   }
 
   _updateCamera(t) {
-    // 5.6–6.35 后拉 5%，12.05–12.55 震动 0.03
     const dolly = 1 + 0.05 * Math.sin(clamp01(progress(t, 5.6, 6.35)) * Math.PI);
     const shakeP = progress(t, 12.05, 12.55);
     const shake = shakeP > 0 && shakeP < 1 ? 0.03 * Math.sin(shakeP * Math.PI) : 0;
 
     this.camera.position.z = this.baseDistance * dolly;
-    this.camera.position.y = this.baseTargetY + Math.sin(t * 61) * shake;
-    this.camera.position.x = Math.cos(t * 47) * shake;
+    this.camera.position.y = this.baseTargetY + Math.sin(t * 61) * shake * 8;
+    this.camera.position.x = Math.cos(t * 47) * shake * 8;
     this.camera.lookAt(0, this.baseTargetY, 0);
   }
 
@@ -467,16 +567,13 @@ export class IntroSequence {
     const start = 6.35;
     const fadeOut = progress(t, 11.6, 12.05);
     this.textWrap.style.opacity = String(1 - fadeOut);
-
-    const show = t >= start - 0.1 && t < 12.1;
-    this.textWrap.style.visibility = show ? 'visible' : 'hidden';
+    this.textWrap.style.visibility = t >= start - 0.1 && t < 12.1 ? 'visible' : 'hidden';
 
     for (let i = 0; i < this.letters.length; i++) {
       const p = letterProgress(t, i, start);
       this.letters[i].style.clipPath = p >= 1 ? 'inset(0 -14% 0 0)' : `inset(0 ${(1 - p) * 100}% 0 0)`;
     }
-    const cnP = letterProgress(t, 0, start + 0.9);
-    this.cnLine.style.opacity = String(clamp01(cnP));
+    this.cnLine.style.opacity = String(clamp01(letterProgress(t, 0, start + 0.9)));
   }
 
   _updateFireworks(t) {
@@ -489,36 +586,37 @@ export class IntroSequence {
     }
     f.points.visible = true;
 
-    // 5 簇，左右交替，每 0.44s 一簇
+    const unit = f.unit;
     for (let c = 0; c < f.clusters; c++) {
       const born = start + c * 0.44;
       const age = t - born;
-      const base = c * f.perCluster;
-      if (age < 0) {
-        for (let k = 0; k < f.perCluster; k++) f.pos[(base + k) * 3 + 1] = -999;
-        continue;
-      }
+      const base = c * f.per;
       const side = c % 2 === 0 ? -1 : 1;
-      const cx = side * (4 + (c * 2.1) % 5);
-      const cy = 6 + (c % 3) * 3.2;
+      const cx = side * unit * (1.4 + (c * 0.7) % 2.2);
+      const cy = unit * (1.9 + (c % 3) * 0.9);
 
-      for (let k = 0; k < f.perCluster; k++) {
+      for (let k = 0; k < f.per; k++) {
         const idx = (base + k) * 3;
-        if (age < 0.02) {
-          const phi = Math.acos(2 * Math.random() - 1);
-          const th = Math.random() * Math.PI * 2;
-          const sp = 3.2 + Math.random() * 4.2;
-          f.vel[idx] = Math.sin(phi) * Math.cos(th) * sp;
-          f.vel[idx + 1] = Math.cos(phi) * sp * 0.85;
-          f.vel[idx + 2] = Math.sin(phi) * Math.sin(th) * sp;
-        }
+        if (age < 0) { f.pos[idx + 1] = -999; continue; }
         const spread = 1 - Math.exp(-3.2 * age);
-        f.pos[idx] = cx + f.vel[idx] * spread * age * 1.1;
-        f.pos[idx + 1] = cy + f.vel[idx + 1] * spread * age - 4.5 * age * age;
-        f.pos[idx + 2] = f.vel[idx + 2] * spread * age;
+        const travel = spread * age * unit * 1.5;
+        f.pos[idx] = cx + f.dir[idx] * travel;
+        f.pos[idx + 1] = cy + f.dir[idx + 1] * travel - 4.5 * age * age * unit * 0.12;
+        f.pos[idx + 2] = f.dir[idx + 2] * travel;
       }
     }
     f.geo.attributes.position.needsUpdate = true;
+  }
+
+  _updateFlash(t) {
+    this.flash.style.opacity = String(this._flashValue(t));
+    this.fade.style.opacity = String(progress(t, 15.1, 15.85));
+  }
+
+  _flashValue(t) {
+    const p = progress(t, 12.1, 12.55);
+    if (p <= 0 || p >= 1) return 0;
+    return Math.sin(p * Math.PI) * 0.92;
   }
 
   // ---------------------------------------------------------------- 渲染
@@ -534,12 +632,20 @@ export class IntroSequence {
   }
 
   dispose() {
-    this.scene.remove(this.points);
+    this.world.remove(this.points);
     this.geometry.dispose();
     this.points.material.dispose();
+    this.world.remove(this.fire.points);
+    this.fire.geo.dispose();
+    this.fire.points.material.dispose();
     this.composer.dispose?.();
     this.flash.remove();
     this.fade.remove();
     this.textWrap.remove();
   }
+}
+
+/** 让 t 在 [a,b] 之间映射成 0~1 */
+function shiftProgress(t, a, b) {
+  return clamp01((t - a) / (b - a));
 }

@@ -22,3 +22,24 @@ test('开场：必须同时有闪光层和黑场淡出层', () => {
   assert.ok(src.includes("id = 'intro-flash'"), '缺少闪光层');
   assert.ok(src.includes("id = 'intro-fade'"), '缺少黑场淡出层');
 });
+
+test('开场性能：每帧主循环里只有帧级三角函数（卡顿根因）', () => {
+  // 上一版每帧对每颗粒子调 dustPoint()，17000 颗 = 6.8 万次 sin/cos，直接卡死
+  const start = src.indexOf('_step(t) {');
+  const end = src.indexOf('_setTree() {');
+  assert.ok(start > 0 && end > start, '找不到 _step 主循环');
+  const stepBody = src.slice(start, end);
+
+  const trig = [...stepBody.matchAll(/Math\.(cos|sin)\(/g)].length;
+  assert.ok(
+    trig <= 8,
+    `每帧主循环里有 ${trig} 次三角函数调用，应该只算帧级别的几次`,
+  );
+  assert.ok(!stepBody.includes('dustPoint'), '主循环里又出现逐粒子的 dustPoint');
+});
+
+test('开场：使用预计算数组（treeX/dustX/bDir）而不是每帧推导', () => {
+  for (const name of ['treeX', 'treeY', 'treeZ', 'dustX', 'bDir', 'bScale']) {
+    assert.ok(src.includes(`this.${name} = new Float32Array`), `缺少预计算数组 ${name}`);
+  }
+});
