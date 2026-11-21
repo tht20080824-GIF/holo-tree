@@ -273,6 +273,11 @@ export class IntroSequence {
     this.flash.id = 'intro-flash';
     document.body.appendChild(this.flash);
 
+    // 黑场淡出层（15.1–15.85s 淡入黑，形成无缝循环）
+    this.fade = document.createElement('div');
+    this.fade.id = 'intro-fade';
+    document.body.appendChild(this.fade);
+
     // 文字层
     this.textWrap = document.createElement('div');
     this.textWrap.id = 'intro-text';
@@ -287,7 +292,7 @@ export class IntroSequence {
     this.letters = [];
     for (const ch of word) {
       const span = document.createElement('span');
-      span.textContent = ch === ' ' ? '\\u00a0' : ch;
+      span.textContent = ch === ' ' ? '\u00a0' : ch;
       span.className = 'intro-letter';
       merry.appendChild(span);
       this.letters.push(span);
@@ -394,9 +399,8 @@ export class IntroSequence {
     this._updateText(t);
     this._updateFlash(t);
 
-    // 淡出黑场 → 循环 / 结束
-    const fade = progress(t, 15.1, 15.85);
-    this.flash.style.opacity = String(Math.max(this._flashValue(t), fade * 0.9));
+    // 闪光 / 淡出黑场 → 循环 / 结束
+    this._updateFlash(t);
 
     if (t >= INTRO_DURATION) {
       if (this.cfg.loop) {
@@ -422,6 +426,11 @@ export class IntroSequence {
     if (t < 10.3) return 0.62;               // 定格压亮度，防止加色过曝
     if (t < 10.55) return 0.62 + 1.1 * easeInOutCubic(progress(t, 10.3, 10.55));
     return 1.35;
+  }
+
+  _updateFlash(t) {
+    this.flash.style.opacity = String(this._flashValue(t));
+    this.fade.style.opacity = String(progress(t, 15.1, 15.85));
   }
 
   _flashValue(t) {
@@ -530,6 +539,7 @@ export class IntroSequence {
     this.points.material.dispose();
     this.composer.dispose?.();
     this.flash.remove();
+    this.fade.remove();
     this.textWrap.remove();
   }
 }

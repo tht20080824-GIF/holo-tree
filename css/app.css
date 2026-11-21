@@ -473,3 +473,13 @@ body.ui-hidden #debug { opacity: 0; pointer-events: none; }
   #intro-text { bottom: calc(4.2vh + env(safe-area-inset-bottom, 0px)); }
   #intro-skip { right: 12px; bottom: calc(12px + env(safe-area-inset-bottom, 0px)); padding: 7px 13px; }
 }
+
+/* 开场结束前的黑场淡出 */
+#intro-fade {
+  position: fixed;
+  inset: 0;
+  z-index: 76;
+  background: #000;
+  opacity: 0;
+  pointer-events: none;
+}
