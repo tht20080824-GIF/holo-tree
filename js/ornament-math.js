@@ -10,6 +10,21 @@ import { trunkRadius } from './ribbon-math.js';
 const GOLDEN_ANGLE = 2.399963;
 
 /**
+ * 散开态下蝴蝶结要飞去的地方：和粒子云的球壳同一个量级，
+ * 但不与树心重合，避免所有蝴蝶结挤成一团。
+ */
+export function makeScatterPoint(rng = Math.random) {
+  const phi = Math.acos(2 * rng() - 1);
+  const theta = rng() * Math.PI * 2;
+  const layer = 15 + rng() * 11;
+  return {
+    x: Math.sin(phi) * Math.cos(theta) * layer,
+    y: Math.cos(phi) * layer * 0.6 + 2,
+    z: Math.sin(phi) * Math.sin(theta) * layer,
+  };
+}
+
+/**
  * @param {object} opts
  * @param {number} opts.count 数量
  * @param {number} opts.height 树高

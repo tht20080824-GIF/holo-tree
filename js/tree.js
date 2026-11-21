@@ -685,7 +685,7 @@ export class HoloTree {
     const ribbonTarget = this.mode === MODE.TREE ? 1 : 0;
     this._ribbonOpacity += (ribbonTarget - this._ribbonOpacity) * (1 - Math.exp(-4 * dt));
     this.ribbon.update(dt, this.camera, this.renderer.getPixelRatio(), this._ribbonOpacity);
-    this.ornamentSet.update(dt, this.time);
+    this.ornamentSet.update(dt, this.time, this.mode === MODE.SCATTER);
 
     this.composer.render();
   }

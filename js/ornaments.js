@@ -9,7 +9,7 @@
  */
 
 import * as THREE from 'three';
-import { placeOrnaments } from './ornament-math.js';
+import { placeOrnaments, makeScatterPoint } from './ornament-math.js';
 
 /** 蝴蝶结：两个压扁的环 + 结心 + 两条飘带 */
 export function createBow({ scale = 1, color = 0xd9b264, sheen = 0xa8874a } = {}) {
@@ -22,6 +22,9 @@ export function createBow({ scale = 1, color = 0xd9b264, sheen = 0xa8874a } = {}
     sheen: 0.6,
     sheenColor: new THREE.Color(sheen),
     sheenRoughness: 0.5,
+    // 极轻的金调自发光：远处也能读出"这是蝴蝶结"，但不至于变成灯泡
+    emissive: new THREE.Color(0x3a2a10),
+    emissiveIntensity: 0.45,
   });
 
   const loopGeo = new THREE.TorusGeometry(0.15, 0.042, 10, 26);
@@ -123,8 +126,8 @@ export function createOrnamentSet({ cfg, shape }) {
     floorY: shape.floorY,
     baseRadius: shape.baseRadius,
     tMin: 0.42,
-    tMax: 0.84,      // 蝴蝶结偏上，形成节奏
-    clearance: 1.18,
+    tMax: 0.86,      // 蝴蝶结偏上，形成节奏
+    clearance: cfg.bowClearance ?? 1.3, // 挂得更靠外，更显眼
   });
 
   const giftColors = cfg.giftColors;
@@ -138,7 +141,14 @@ export function createOrnamentSet({ cfg, shape }) {
     node.rotation.y = spot.yaw;
     node.rotation.z = spot.tilt * 0.5;
     group.add(node);
-    items.push({ node, baseY: spot.position.y, phase: spot.phase, amp: 0.16 });
+    items.push({
+      kind: 'gift',
+      node,
+      baseY: spot.position.y,
+      phase: spot.phase,
+      amp: 0.16,
+      baseScale: node.scale.x,
+    });
   });
 
   const bowColors = cfg.bowColors;
@@ -148,16 +158,57 @@ export function createOrnamentSet({ cfg, shape }) {
     node.rotation.y = spot.yaw;
     node.rotation.z = spot.tilt;
     group.add(node);
-    items.push({ node, baseY: spot.position.y, phase: spot.phase, amp: 0.22 });
+    items.push({
+      kind: 'bow',
+      node,
+      home: new THREE.Vector3(spot.position.x, spot.position.y, spot.position.z),
+      scatter: makeScatterPoint(),
+      baseY: spot.position.y,
+      phase: spot.phase,
+      amp: 0.22,
+      baseScale: node.scale.x,
+      tumble: (Math.random() - 0.5) * 1.6,
+    });
   });
+
+  const target = new THREE.Vector3();
+  const state = { scatter: 0 };
 
   return {
     group,
     items,
-    update(dt, time) {
+    /**
+     * @param {number} dt
+     * @param {number} time
+     * @param {boolean} isScatter 是否处于散开态
+     */
+    update(dt, time, isScatter = false) {
+      // 跟粒子用同一个量级的缓动，视觉上才是"一起散开"
+      const targetScatter = isScatter ? 1 : 0;
+      state.scatter += (targetScatter - state.scatter) * (1 - Math.exp(-2.2 * dt));
+      const s = state.scatter;
+
       for (const item of items) {
-        // 极轻的上下浮动，幅度 <0.25 单位，避免"挂件乱晃"
-        item.node.position.y = item.baseY + Math.sin(time * 0.9 + item.phase) * item.amp;
+        if (item.kind === 'bow') {
+          // 合拢：挂在树身外侧，轻轻上下浮动
+          // 散开：沿抛物弧线飞向球壳上的随机点，并慢慢翻滚
+          const bob = Math.sin(time * 0.9 + item.phase) * item.amp * (1 - s);
+          target.lerpVectors(item.home, item.scatter, s);
+          item.node.position.set(
+            target.x,
+            target.y + bob + Math.sin(Math.PI * s) * 1.2,
+            target.z,
+          );
+          item.node.rotation.y += item.tumble * dt * s;
+          item.node.rotation.x = Math.sin(time * 0.7 + item.phase) * 0.25 * s;
+          item.node.scale.setScalar(item.baseScale * (1 + 0.12 * s));
+        } else {
+          // 礼盒留在树形语境里：散开时缩没，避免"盒子悬在空中"的怪感
+          const keep = 1 - s;
+          item.node.visible = keep > 0.04;
+          item.node.scale.setScalar(item.baseScale * keep);
+          item.node.position.y = item.baseY + Math.sin(time * 0.9 + item.phase) * item.amp;
+        }
       }
     },
   };

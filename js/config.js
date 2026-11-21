@@ -68,9 +68,10 @@ export const CONFIG = {
 
   ornaments: {
     gifts: 5,
-    bows: 4,
+    bows: 5,
     giftSize: 0.78,
-    bowSize: 0.85,
+    bowSize: 1.5,         // 放大到和礼盒同一量级，远看也认得出
+    bowClearance: 1.32,   // 挂得更靠外（树身半径的 1.32 倍），不埋在树里
     // 颜色全部取自现有调色板，不引入新色系
     giftColors: [0x103f2c, 0x6f1b25, 0x16202e],
     bowColors: [0xd9b264, 0x8e1f2f],

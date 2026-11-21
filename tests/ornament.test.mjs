@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { placeOrnaments } from '../js/ornament-math.js';
+import { placeOrnaments, makeScatterPoint } from '../js/ornament-math.js';
 import { trunkRadius } from '../js/ribbon-math.js';
 import { CONFIG } from '../js/config.js';
 
@@ -65,4 +65,34 @@ test('装饰：尺寸有小幅随机，避免一模一样', () => {
 test('装饰：数量克制（规格上"不能太多"）', () => {
   assert.ok(CONFIG.ornaments.gifts <= 6, '礼盒太多会显廉价');
   assert.ok(CONFIG.ornaments.bows <= 5, '蝴蝶结太多会显廉价');
+});
+
+test('蝴蝶结：挂得比礼盒更靠外，才显眼', () => {
+  const bows = placeOrnaments({
+    ...shape, count: CONFIG.ornaments.bows, clearance: CONFIG.ornaments.bowClearance, rng: seeded(17),
+  });
+  for (const it of bows) {
+    const ratio = it.radius / trunkRadius(it.t, shape.baseRadius);
+    assert.ok(ratio > 1.28, `蝴蝶结外扩只有 ${ratio.toFixed(2)} 倍，会埋在树里`);
+  }
+});
+
+test('蝴蝶结：尺寸足够大（与礼盒同量级）', () => {
+  assert.ok(CONFIG.ornaments.bowSize >= 1.2, '蝴蝶结太小，远看不见');
+  assert.ok(CONFIG.ornaments.bowSize >= CONFIG.ornaments.giftSize * 1.2, '蝴蝶结应比礼盒更大');
+});
+
+test('散开目标：落在粒子云同一量级的球壳上', () => {
+  for (let i = 0; i < 50; i++) {
+    const p = makeScatterPoint(seeded(i + 1));
+    const r = Math.hypot(p.x, p.y, p.z);
+    assert.ok(Number.isFinite(r), '出现 NaN');
+    assert.ok(r > 10 && r < 35, `散开半径 ${r.toFixed(1)} 超出范围`);
+  }
+});
+
+test('散开目标：不是所有蝴蝶结飞去同一个点', () => {
+  const pts = Array.from({ length: 5 }, (_, i) => makeScatterPoint(seeded(i + 100)));
+  const key = new Set(pts.map((p) => `${p.x.toFixed(1)},${p.y.toFixed(1)},${p.z.toFixed(1)}`));
+  assert.ok(key.size >= 4, '散开位置重复，会挤成一团');
 });
