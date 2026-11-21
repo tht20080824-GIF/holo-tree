@@ -1,5 +1,7 @@
 # HOLO TREE · 手势圣诞树（自研版）
 
+**在线版（GitHub Pages，永久）：<https://tht20080824-gif.github.io/holo-tree/>**
+
 一棵用手比划就能操控的 3D 粒子圣诞树。**代码是自己的**，不是从任何人那里改的副本：
 three.js 场景、手势识别、操控手感、UI 全部按我们的需求重写，注释和可调参数都留着。
 
@@ -181,7 +183,8 @@ node tools/verify.mjs
 
 ## 部署到公网
 
-摄像头要求 **https**（localhost 例外）。任何静态托管都行：
+摄像头要求 **https**（localhost 例外）。当前已经部署在 **GitHub Pages**（`docs/` 作为发布源），
+推送 `main` 后 Pages 会自动重新发布。也可以换别的静态托管：
 
 - **Netlify**：把整个文件夹拖到 <https://app.netlify.com/drop>
 - **Vercel** / **Cloudflare Pages**：直接连目录，无需构建命令
