@@ -48,6 +48,7 @@ const T = {
   returnEnd: 14.6,
   hold2End: 15.1,
   fadeEnd: 15.85,
+  cutAt: 12.32,            // 闪屏峰值：这里收尾，交给主场景散开→重组
 };
 
 const VERT = /* glsl */ `
@@ -98,6 +99,7 @@ export class IntroSequence {
     this.shape = shape;
     this.time = 0;
     this.done = false;
+    this.finished = false;   // true = 自然播到闪屏（不是用户点的跳过）
 
     this.count = cfg.count;
     this.scene = new THREE.Scene();
@@ -397,6 +399,12 @@ export class IntroSequence {
   }
 
   _step(t) {
+    // 闪屏峰值处收尾：不再播回卷/定格/黑场，后面交给主场景的散开→重组
+    if (t >= T.cutAt) {
+      this.finished = true;
+      this.done = true;
+      return;
+    }
     const n = this.count;
     const P = this.positions;
     const shape = this.shape;

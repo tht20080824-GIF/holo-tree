@@ -148,11 +148,42 @@ function startIntro() {
 
 function endIntro() {
   if (!intro) return;
+  const handoff = intro.finished;      // 自然播到闪屏 vs 用户点「跳过」
+  const camFrom = intro.camera ? {
+    z: intro.camera.position.z,
+    y: intro.camera.position.y,
+    targetY: intro.baseTargetY ?? 0.4,
+    fov: intro.camera.fov,
+  } : null;
   intro.skipButton?.remove();
   intro.dispose();
   intro = null;
   document.body.classList.remove('intro-on');
   els.loader.classList.add('hidden');
+  if (handoff) handoffToMainBody(camFrom);
+}
+
+// 闪屏之后不再切黑场：主场景先铺成散开态，再用 0.26s 收拢成主体。
+// 白色闪光盖住场景切换，用户看到的是「爆散 → 散开 → 重组成本体」。
+function handoffToMainBody(camFrom) {
+  if (!tree) return;
+  tree.snapToScatter();
+  tree.startCameraBlend(camFrom, 0.6);
+  rig.setMode(MODE.SCATTER);
+  flashBridge();
+  setTimeout(() => {
+    tree.setMode(MODE.TREE);
+    rig.setMode(MODE.TREE);
+    recognizer.mode = MODE.TREE;
+  }, 260);
+}
+
+function flashBridge() {
+  const el = document.createElement('div');
+  el.id = 'intro-flash-bridge';
+  document.body.appendChild(el);
+  requestAnimationFrame(() => { el.style.opacity = '0'; });
+  setTimeout(() => el.remove(), 700);
 }
 
 // 按 R：把当前这条序列丢掉，重建一条，从头再放一遍（播到一半按也生效）
@@ -247,12 +278,38 @@ const tracker = new HandTracker({
 
 const canvasEl = els.app.querySelector('canvas');
 
+// 手机排查用：地址后面加 ?tapdebug=1，点屏幕会在左上角显示"点到了什么"
+const TAP_DEBUG = new URLSearchParams(location.search).has('tapdebug');
+let tapDebugEl = null;
+function showTapDebug(text) {
+  if (!TAP_DEBUG) return;
+  if (!tapDebugEl) {
+    tapDebugEl = document.createElement('div');
+    tapDebugEl.id = 'tap-debug';
+    document.body.appendChild(tapDebugEl);
+  }
+  tapDebugEl.textContent = text;
+}
+
 attachPointerControls(canvasEl, rig, {
   onDoubleTap: () => switchMode(rig.mode === MODE.TREE ? MODE.SCATTER : MODE.TREE),
-  onTap: (cx, cy) => {
-    if (tree.focusedPhoto) { closePhoto(); return; }
+  onTap: (cx, cy, pointerType) => {
+    // 返回 true = 这次点击已经用掉了，不要再拿去做双击切形态
+    const tag = `${pointerType} ${Math.round(cx)},${Math.round(cy)}`;
+    if (tree.focusedPhoto) {
+      showTapDebug(`${tag} → 关闭照片`);
+      closePhoto();
+      return true;
+    }
     const node = tree.pickAt(cx / window.innerWidth, cy / window.innerHeight);
-    if (node) openPhoto(node);
+    if (node) {
+      const idx = tree.photos.indexOf(node);
+      showTapDebug(`${tag} → 命中 #${idx}（共 ${tree.photos.length} 张）`);
+      openPhoto(node);
+      return true;
+    }
+    showTapDebug(`${tag} → 没点中（共 ${tree.photos.length} 张）`);
+    return false;
   },
 });
 
@@ -371,11 +428,51 @@ let lastTime = performance.now();
 let firstFrame = true;
 let lastDebugAt = 0;
 
+// ---------------------------------------------------------------- 帧率控制
+// 目标：稳定在 50~61fps。
+// 上限：高刷屏（≥100Hz）隔帧渲染，落到 60；90/144Hz 不跳帧，免得掉到 50 以下。
+// 下限：帧率低于 50 时逐级降像素比（0.7x 下限），恢复了再慢慢加回来。
+const BASE_PR = Math.min(window.devicePixelRatio || 1, isTouchDevice ? 1.6 : 2);
+let rafGap = 16.7;        // 估测的屏幕刷新间隔
+let lastRafAt = 0;
+let renderFps = 60;
+let qualityScale = 1;
+let perfElapsed = 0;
+let perfFrames = 0;
+
+function shouldRenderFrame(now) {
+  if (lastRafAt) rafGap += ((now - lastRafAt) - rafGap) * 0.1;
+  lastRafAt = now;
+  if (rafGap <= 10.2 && now - lastTime < 1000 / 61 - 1) return false; // 120Hz → 60fps
+  return true;
+}
+
+function governFrameRate(dt) {
+  renderFps += (1 / Math.max(dt, 1e-3) - renderFps) * 0.05;
+  if (intro) return;    // 开场用独立的 composer，先别动像素比，免得尺寸不同步
+  perfElapsed += dt;
+  perfFrames++;
+  if (perfElapsed < 1.2) return;
+  const fps = perfFrames / perfElapsed;
+  perfElapsed = 0;
+  perfFrames = 0;
+  if (fps < 50 && qualityScale > 0.7) {
+    qualityScale = Math.max(0.7, qualityScale - 0.1);
+    tree?.setPixelRatio(BASE_PR * qualityScale);
+  } else if (fps > 58 && qualityScale < 1) {
+    qualityScale = Math.min(1, qualityScale + 0.05);
+    tree?.setPixelRatio(BASE_PR * qualityScale);
+  }
+}
+
 function frame(now) {
   requestAnimationFrame(frame);
+  if (!shouldRenderFrame(now)) return;
 
-  const dt = Math.min((now - lastTime) / 1000, 0.05); // 切标签页回来时别让 dt 爆炸
+  // dt 上限 20ms = 50fps 的时间步长；掉帧时宁可慢一点，也不要一次跳一大步
+  const dt = Math.min((now - lastTime) / 1000, 0.02);
   lastTime = now;
+  governFrameRate(dt);
 
   if (now - handSeenAt > 400) latestHand = null; // 手离开画面一段时间就当作没手
 
@@ -449,6 +546,7 @@ function frame(now) {
           ? new Date(window.__HOLO_BUILD__).toLocaleString('zh-CN', { hour12: false })
           : 'dev'
       }`,
+      `画面 ${renderFps.toFixed(0)} fps · 画质 ${(qualityScale * 100).toFixed(0)}%`,
       `手势识别 ${fps} fps`,
       `张开度 ${out.openness.toFixed(2)}  (张开>${CONFIG.gesture.openOn} / 握拳<${CONFIG.gesture.fistOn})`,
       `捏合比 ${out.pinchRatio.toFixed(2)}  (捏合<${CONFIG.gesture.pinchOn})`,

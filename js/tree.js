@@ -269,6 +269,7 @@ export class HoloTree {
     this.treeRoot.add(this.ribbon.points);
 
     this._ribbonOpacity = 1; // 散开态时淡出
+    this._camBlend = null;   // 开场交棒时的机位过渡
   }
 
   /**
@@ -590,11 +591,55 @@ export class HoloTree {
     this._ndc.set(x01 * 2 - 1, -(y01 * 2 - 1));
     this.raycaster.setFromCamera(this._ndc, this.camera);
     const hits = this.raycaster.intersectObjects(this.photos, true);
-    if (!hits.length) return null;
+    if (hits.length) {
+      let node = hits[0].object;
+      while (node && !node.userData.isPhoto) node = node.parent;
+      if (node) return node;
+    }
 
-    let node = hits[0].object;
-    while (node && !node.userData.isPhoto) node = node.parent;
-    return node || null;
+    // 手指容差：相框在屏幕上只有几十像素，射线经常打不中。
+    // 退一步按「投影中心 + 相框屏幕半径」找最近的一张，但必须朝向镜头、
+    // 且距离不超过 1.35 倍半径 —— 果断一点，又不至于点哪儿都开。
+    const W = window.innerWidth;
+    const H = window.innerHeight;
+    const px = x01 * W;
+    const py = y01 * H;
+    const right = new THREE.Vector3().setFromMatrixColumn(this.camera.matrixWorld, 0);
+    const world = new THREE.Vector3();
+    const edge = new THREE.Vector3();
+    const toCam = new THREE.Vector3();
+    const normal = new THREE.Vector3();
+    const quat = new THREE.Quaternion();
+
+    let best = null;
+    let bestScore = Infinity;
+    for (const node of this.photos) {
+      if (!node || node.visible === false) continue;
+      node.getWorldPosition(world);
+      toCam.copy(this.camera.position).sub(world);
+      const dist = toCam.length();
+      if (dist < 1e-3) continue;
+      toCam.divideScalar(dist);
+
+      normal.set(0, 0, 1).applyQuaternion(node.getWorldQuaternion(quat));
+      if (normal.dot(toCam) < 0.15) continue;   // 背对镜头的不算
+
+      const ndc = world.clone().project(this.camera);
+      if (ndc.z > 1) continue;
+      const sx = (ndc.x * 0.5 + 0.5) * W;
+      const sy = (-ndc.y * 0.5 + 0.5) * H;
+      const d = Math.hypot(sx - px, sy - py);
+
+      const rWorld = (node.userData.baseScale || 1) * 1.0;
+      edge.copy(world).addScaledVector(right, rWorld).project(this.camera);
+      const rPx = Math.abs((edge.x * 0.5 + 0.5) * W - sx);
+      const radius = Math.min(72, Math.max(26, rPx * 1.35));
+      if (d <= radius) {
+        const score = d / radius;
+        if (score < bestScore) { bestScore = score; best = node; }
+      }
+    }
+    return best;
   }
 
   /** 悬停放大一点点，给"这里可以点"的反馈 */
@@ -720,6 +765,19 @@ export class HoloTree {
     this.mode = mode;
   }
 
+  /** 从开场机位平滑过渡到交互机位（from: {z,y,targetY,fov}） */
+  startCameraBlend(from, duration = 0.6) {
+    if (!from) return;
+    this._camBlend = { from, dur: Math.max(0.05, duration), t: 0 };
+  }
+
+  /** 开场交棒：瞬间铺成散开态，随后 setMode(TREE) 会把它收拢成主体 */
+  snapToScatter() {
+    this.mode = MODE.SCATTER;
+    this.pos.set(this.scatterTarget);
+    this._ribbonOpacity = 0;
+  }
+
   /** 捏合时放一小簇金色烟花 */
   burst(origin = new THREE.Vector3(0, 2, 8)) {
     const slot = this.bursts[this._burstIndex++ % this.bursts.length];
@@ -753,9 +811,30 @@ export class HoloTree {
     // 相机：绕树转由 treeRoot 承担，所以相机只沿 z 推拉，保持构图稳定
     this.treeRoot.rotation.y = rig.yaw;
     this.treeRoot.rotation.x = rig.pitch;
-    this.camera.position.z = this.cfg.camera.baseDistance * rig.distanceFactor;
-    this.camera.position.y = 1.6 + rig.pitch * 4;
-    this.camera.lookAt(0, 0.4, 0);
+    const zTo = this.cfg.camera.baseDistance * rig.distanceFactor;
+    const yTo = 1.6 + rig.pitch * 4;
+    if (this._camBlend) {
+      // 开场交棒：先从开场的广角机位起步，0.4s 推到交互机位
+      const b = this._camBlend;
+      b.t = Math.min(1, b.t + dt / b.dur);
+      const e = 1 - Math.pow(1 - b.t, 3);
+      this.camera.position.z = b.from.z + (zTo - b.from.z) * e;
+      this.camera.position.y = b.from.y + (yTo - b.from.y) * e;
+      this.camera.lookAt(0, b.from.targetY + (0.4 - b.from.targetY) * e, 0);
+      if (b.from.fov && b.from.fov !== this.cfg.camera.fov) {
+        this.camera.fov = b.from.fov + (this.cfg.camera.fov - b.from.fov) * e;
+        this.camera.updateProjectionMatrix();
+      }
+      if (b.t >= 1) {
+        this.camera.fov = this.cfg.camera.fov;
+        this.camera.updateProjectionMatrix();
+        this._camBlend = null;
+      }
+    } else {
+      this.camera.position.z = zTo;
+      this.camera.position.y = yTo;
+      this.camera.lookAt(0, 0.4, 0);
+    }
 
     this._updateParticles(dt, t);
 
@@ -843,6 +922,15 @@ export class HoloTree {
         slot.points.material.opacity = 0;
       }
     }
+  }
+
+  /** 动态画质：按帧率需要调低/恢复像素比（保持 50fps 以上） */
+  setPixelRatio(pr) {
+    const target = Math.max(0.8, Math.min(window.devicePixelRatio || 1, pr));
+    if (Math.abs(this.renderer.getPixelRatio() - target) < 0.02) return;
+    this.renderer.setPixelRatio(target);
+    this.renderer.setSize(window.innerWidth, window.innerHeight);
+    this.composer.setSize(window.innerWidth, window.innerHeight);
   }
 
   resize() {

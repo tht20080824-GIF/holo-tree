@@ -222,6 +222,7 @@ body.ui-hidden #debug { opacity: 0; pointer-events: none; }
   left: 0;
   top: 0;
   z-index: 30;
+  pointer-events: none;   /* 别让这个圆点挡住画布上的点击 */
   width: 26px;
   height: 26px;
   margin: -13px 0 0 -13px;
@@ -475,6 +476,35 @@ body.ui-hidden #debug { opacity: 0; pointer-events: none; }
   color: rgba(229, 200, 142, 0.78);
   opacity: 0;
   filter: drop-shadow(0 0 10px rgba(229, 200, 142, 0.28));
+}
+
+#tap-debug {
+  position: fixed;
+  left: 12px;
+  top: 96px;
+  z-index: 95;
+  padding: 6px 10px;
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.72);
+  border: 1px solid rgba(75, 240, 180, 0.35);
+  color: #9ff5d2;
+  font-family: ui-monospace, Menlo, monospace;
+  font-size: 12px;
+  line-height: 1.5;
+  pointer-events: none;
+  white-space: pre-wrap;
+  max-width: 70vw;
+}
+
+#intro-flash-bridge {
+  position: fixed;
+  inset: 0;
+  z-index: 75;
+  pointer-events: none;
+  opacity: 1;
+  background: radial-gradient(circle at 50% 46%, #ffffff 0%, rgba(255, 250, 235, 0.82) 34%, rgba(255, 245, 220, 0) 72%);
+  mix-blend-mode: screen;
+  transition: opacity 0.5s ease;
 }
 
 #intro-flash {

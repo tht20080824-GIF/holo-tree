@@ -232,6 +232,7 @@ body.ui-hidden #debug { opacity: 0; pointer-events: none; }
   left: 0;
   top: 0;
   z-index: 30;
+  pointer-events: none;   /* 别让这个圆点挡住画布上的点击 */
   width: 26px;
   height: 26px;
   margin: -13px 0 0 -13px;
@@ -487,6 +488,35 @@ body.ui-hidden #debug { opacity: 0; pointer-events: none; }
   filter: drop-shadow(0 0 10px rgba(229, 200, 142, 0.28));
 }
 
+#tap-debug {
+  position: fixed;
+  left: 12px;
+  top: 96px;
+  z-index: 95;
+  padding: 6px 10px;
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.72);
+  border: 1px solid rgba(75, 240, 180, 0.35);
+  color: #9ff5d2;
+  font-family: ui-monospace, Menlo, monospace;
+  font-size: 12px;
+  line-height: 1.5;
+  pointer-events: none;
+  white-space: pre-wrap;
+  max-width: 70vw;
+}
+
+#intro-flash-bridge {
+  position: fixed;
+  inset: 0;
+  z-index: 75;
+  pointer-events: none;
+  opacity: 1;
+  background: radial-gradient(circle at 50% 46%, #ffffff 0%, rgba(255, 250, 235, 0.82) 34%, rgba(255, 245, 220, 0) 72%);
+  mix-blend-mode: screen;
+  transition: opacity 0.5s ease;
+}
+
 #intro-flash {
   position: fixed;
   inset: 0;
@@ -599,7 +629,7 @@ body.ui-hidden #debug { opacity: 0; pointer-events: none; }
 
   <div id="toast"></div>
 
-  <script>window.__HOLO_NO_VENDOR__ = true; window.__HOLO_BUILD__ = "2026-11-21T21:23:35.352Z";</script>
+  <script>window.__HOLO_NO_VENDOR__ = true; window.__HOLO_BUILD__ = "2026-11-21T21:52:07.403Z";</script>
 <script>
 /* 由 tools/bundle.mjs 生成 —— 不要手改，改源码后重新构建 */
 (function () {
@@ -762,11 +792,42 @@ function startIntro() {
 
 function endIntro() {
   if (!intro) return;
+  const handoff = intro.finished;      // 自然播到闪屏 vs 用户点「跳过」
+  const camFrom = intro.camera ? {
+    z: intro.camera.position.z,
+    y: intro.camera.position.y,
+    targetY: intro.baseTargetY ?? 0.4,
+    fov: intro.camera.fov,
+  } : null;
   intro.skipButton?.remove();
   intro.dispose();
   intro = null;
   document.body.classList.remove('intro-on');
   els.loader.classList.add('hidden');
+  if (handoff) handoffToMainBody(camFrom);
+}
+
+// 闪屏之后不再切黑场：主场景先铺成散开态，再用 0.26s 收拢成主体。
+// 白色闪光盖住场景切换，用户看到的是「爆散 → 散开 → 重组成本体」。
+function handoffToMainBody(camFrom) {
+  if (!tree) return;
+  tree.snapToScatter();
+  tree.startCameraBlend(camFrom, 0.6);
+  rig.setMode(MODE.SCATTER);
+  flashBridge();
+  setTimeout(() => {
+    tree.setMode(MODE.TREE);
+    rig.setMode(MODE.TREE);
+    recognizer.mode = MODE.TREE;
+  }, 260);
+}
+
+function flashBridge() {
+  const el = document.createElement('div');
+  el.id = 'intro-flash-bridge';
+  document.body.appendChild(el);
+  requestAnimationFrame(() => { el.style.opacity = '0'; });
+  setTimeout(() => el.remove(), 700);
 }
 
 // 按 R：把当前这条序列丢掉，重建一条，从头再放一遍（播到一半按也生效）
@@ -861,12 +922,38 @@ const tracker = new HandTracker({
 
 const canvasEl = els.app.querySelector('canvas');
 
+// 手机排查用：地址后面加 ?tapdebug=1，点屏幕会在左上角显示"点到了什么"
+const TAP_DEBUG = new URLSearchParams(location.search).has('tapdebug');
+let tapDebugEl = null;
+function showTapDebug(text) {
+  if (!TAP_DEBUG) return;
+  if (!tapDebugEl) {
+    tapDebugEl = document.createElement('div');
+    tapDebugEl.id = 'tap-debug';
+    document.body.appendChild(tapDebugEl);
+  }
+  tapDebugEl.textContent = text;
+}
+
 attachPointerControls(canvasEl, rig, {
   onDoubleTap: () => switchMode(rig.mode === MODE.TREE ? MODE.SCATTER : MODE.TREE),
-  onTap: (cx, cy) => {
-    if (tree.focusedPhoto) { closePhoto(); return; }
+  onTap: (cx, cy, pointerType) => {
+    // 返回 true = 这次点击已经用掉了，不要再拿去做双击切形态
+    const tag = `${pointerType} ${Math.round(cx)},${Math.round(cy)}`;
+    if (tree.focusedPhoto) {
+      showTapDebug(`${tag} → 关闭照片`);
+      closePhoto();
+      return true;
+    }
     const node = tree.pickAt(cx / window.innerWidth, cy / window.innerHeight);
-    if (node) openPhoto(node);
+    if (node) {
+      const idx = tree.photos.indexOf(node);
+      showTapDebug(`${tag} → 命中 #${idx}（共 ${tree.photos.length} 张）`);
+      openPhoto(node);
+      return true;
+    }
+    showTapDebug(`${tag} → 没点中（共 ${tree.photos.length} 张）`);
+    return false;
   },
 });
 
@@ -985,11 +1072,51 @@ let lastTime = performance.now();
 let firstFrame = true;
 let lastDebugAt = 0;
 
+// ---------------------------------------------------------------- 帧率控制
+// 目标：稳定在 50~61fps。
+// 上限：高刷屏（≥100Hz）隔帧渲染，落到 60；90/144Hz 不跳帧，免得掉到 50 以下。
+// 下限：帧率低于 50 时逐级降像素比（0.7x 下限），恢复了再慢慢加回来。
+const BASE_PR = Math.min(window.devicePixelRatio || 1, isTouchDevice ? 1.6 : 2);
+let rafGap = 16.7;        // 估测的屏幕刷新间隔
+let lastRafAt = 0;
+let renderFps = 60;
+let qualityScale = 1;
+let perfElapsed = 0;
+let perfFrames = 0;
+
+function shouldRenderFrame(now) {
+  if (lastRafAt) rafGap += ((now - lastRafAt) - rafGap) * 0.1;
+  lastRafAt = now;
+  if (rafGap <= 10.2 && now - lastTime < 1000 / 61 - 1) return false; // 120Hz → 60fps
+  return true;
+}
+
+function governFrameRate(dt) {
+  renderFps += (1 / Math.max(dt, 1e-3) - renderFps) * 0.05;
+  if (intro) return;    // 开场用独立的 composer，先别动像素比，免得尺寸不同步
+  perfElapsed += dt;
+  perfFrames++;
+  if (perfElapsed < 1.2) return;
+  const fps = perfFrames / perfElapsed;
+  perfElapsed = 0;
+  perfFrames = 0;
+  if (fps < 50 && qualityScale > 0.7) {
+    qualityScale = Math.max(0.7, qualityScale - 0.1);
+    tree?.setPixelRatio(BASE_PR * qualityScale);
+  } else if (fps > 58 && qualityScale < 1) {
+    qualityScale = Math.min(1, qualityScale + 0.05);
+    tree?.setPixelRatio(BASE_PR * qualityScale);
+  }
+}
+
 function frame(now) {
   requestAnimationFrame(frame);
+  if (!shouldRenderFrame(now)) return;
 
-  const dt = Math.min((now - lastTime) / 1000, 0.05); // 切标签页回来时别让 dt 爆炸
+  // dt 上限 20ms = 50fps 的时间步长；掉帧时宁可慢一点，也不要一次跳一大步
+  const dt = Math.min((now - lastTime) / 1000, 0.02);
   lastTime = now;
+  governFrameRate(dt);
 
   if (now - handSeenAt > 400) latestHand = null; // 手离开画面一段时间就当作没手
 
@@ -1063,6 +1190,7 @@ function frame(now) {
           ? new Date(window.__HOLO_BUILD__).toLocaleString('zh-CN', { hour12: false })
           : 'dev'
       }`,
+      `画面 ${renderFps.toFixed(0)} fps · 画质 ${(qualityScale * 100).toFixed(0)}%`,
       `手势识别 ${fps} fps`,
       `张开度 ${out.openness.toFixed(2)}  (张开>${CONFIG.gesture.openOn} / 握拳<${CONFIG.gesture.fistOn})`,
       `捏合比 ${out.pinchRatio.toFixed(2)}  (捏合<${CONFIG.gesture.pinchOn})`,
@@ -1982,6 +2110,7 @@ class HoloTree {
     this.treeRoot.add(this.ribbon.points);
 
     this._ribbonOpacity = 1; // 散开态时淡出
+    this._camBlend = null;   // 开场交棒时的机位过渡
   }
 
   /**
@@ -2303,11 +2432,55 @@ class HoloTree {
     this._ndc.set(x01 * 2 - 1, -(y01 * 2 - 1));
     this.raycaster.setFromCamera(this._ndc, this.camera);
     const hits = this.raycaster.intersectObjects(this.photos, true);
-    if (!hits.length) return null;
+    if (hits.length) {
+      let node = hits[0].object;
+      while (node && !node.userData.isPhoto) node = node.parent;
+      if (node) return node;
+    }
 
-    let node = hits[0].object;
-    while (node && !node.userData.isPhoto) node = node.parent;
-    return node || null;
+    // 手指容差：相框在屏幕上只有几十像素，射线经常打不中。
+    // 退一步按「投影中心 + 相框屏幕半径」找最近的一张，但必须朝向镜头、
+    // 且距离不超过 1.35 倍半径 —— 果断一点，又不至于点哪儿都开。
+    const W = window.innerWidth;
+    const H = window.innerHeight;
+    const px = x01 * W;
+    const py = y01 * H;
+    const right = new THREE.Vector3().setFromMatrixColumn(this.camera.matrixWorld, 0);
+    const world = new THREE.Vector3();
+    const edge = new THREE.Vector3();
+    const toCam = new THREE.Vector3();
+    const normal = new THREE.Vector3();
+    const quat = new THREE.Quaternion();
+
+    let best = null;
+    let bestScore = Infinity;
+    for (const node of this.photos) {
+      if (!node || node.visible === false) continue;
+      node.getWorldPosition(world);
+      toCam.copy(this.camera.position).sub(world);
+      const dist = toCam.length();
+      if (dist < 1e-3) continue;
+      toCam.divideScalar(dist);
+
+      normal.set(0, 0, 1).applyQuaternion(node.getWorldQuaternion(quat));
+      if (normal.dot(toCam) < 0.15) continue;   // 背对镜头的不算
+
+      const ndc = world.clone().project(this.camera);
+      if (ndc.z > 1) continue;
+      const sx = (ndc.x * 0.5 + 0.5) * W;
+      const sy = (-ndc.y * 0.5 + 0.5) * H;
+      const d = Math.hypot(sx - px, sy - py);
+
+      const rWorld = (node.userData.baseScale || 1) * 1.0;
+      edge.copy(world).addScaledVector(right, rWorld).project(this.camera);
+      const rPx = Math.abs((edge.x * 0.5 + 0.5) * W - sx);
+      const radius = Math.min(72, Math.max(26, rPx * 1.35));
+      if (d <= radius) {
+        const score = d / radius;
+        if (score < bestScore) { bestScore = score; best = node; }
+      }
+    }
+    return best;
   }
 
   /** 悬停放大一点点，给"这里可以点"的反馈 */
@@ -2433,6 +2606,19 @@ class HoloTree {
     this.mode = mode;
   }
 
+  /** 从开场机位平滑过渡到交互机位（from: {z,y,targetY,fov}） */
+  startCameraBlend(from, duration = 0.6) {
+    if (!from) return;
+    this._camBlend = { from, dur: Math.max(0.05, duration), t: 0 };
+  }
+
+  /** 开场交棒：瞬间铺成散开态，随后 setMode(TREE) 会把它收拢成主体 */
+  snapToScatter() {
+    this.mode = MODE.SCATTER;
+    this.pos.set(this.scatterTarget);
+    this._ribbonOpacity = 0;
+  }
+
   /** 捏合时放一小簇金色烟花 */
   burst(origin = new THREE.Vector3(0, 2, 8)) {
     const slot = this.bursts[this._burstIndex++ % this.bursts.length];
@@ -2466,9 +2652,30 @@ class HoloTree {
     // 相机：绕树转由 treeRoot 承担，所以相机只沿 z 推拉，保持构图稳定
     this.treeRoot.rotation.y = rig.yaw;
     this.treeRoot.rotation.x = rig.pitch;
-    this.camera.position.z = this.cfg.camera.baseDistance * rig.distanceFactor;
-    this.camera.position.y = 1.6 + rig.pitch * 4;
-    this.camera.lookAt(0, 0.4, 0);
+    const zTo = this.cfg.camera.baseDistance * rig.distanceFactor;
+    const yTo = 1.6 + rig.pitch * 4;
+    if (this._camBlend) {
+      // 开场交棒：先从开场的广角机位起步，0.4s 推到交互机位
+      const b = this._camBlend;
+      b.t = Math.min(1, b.t + dt / b.dur);
+      const e = 1 - Math.pow(1 - b.t, 3);
+      this.camera.position.z = b.from.z + (zTo - b.from.z) * e;
+      this.camera.position.y = b.from.y + (yTo - b.from.y) * e;
+      this.camera.lookAt(0, b.from.targetY + (0.4 - b.from.targetY) * e, 0);
+      if (b.from.fov && b.from.fov !== this.cfg.camera.fov) {
+        this.camera.fov = b.from.fov + (this.cfg.camera.fov - b.from.fov) * e;
+        this.camera.updateProjectionMatrix();
+      }
+      if (b.t >= 1) {
+        this.camera.fov = this.cfg.camera.fov;
+        this.camera.updateProjectionMatrix();
+        this._camBlend = null;
+      }
+    } else {
+      this.camera.position.z = zTo;
+      this.camera.position.y = yTo;
+      this.camera.lookAt(0, 0.4, 0);
+    }
 
     this._updateParticles(dt, t);
 
@@ -2556,6 +2763,15 @@ class HoloTree {
         slot.points.material.opacity = 0;
       }
     }
+  }
+
+  /** 动态画质：按帧率需要调低/恢复像素比（保持 50fps 以上） */
+  setPixelRatio(pr) {
+    const target = Math.max(0.8, Math.min(window.devicePixelRatio || 1, pr));
+    if (Math.abs(this.renderer.getPixelRatio() - target) < 0.02) return;
+    this.renderer.setPixelRatio(target);
+    this.renderer.setSize(window.innerWidth, window.innerHeight);
+    this.composer.setSize(window.innerWidth, window.innerHeight);
   }
 
   resize() {
@@ -2742,14 +2958,23 @@ function distance(a, b) {
   return Math.hypot(a.x - b.x, a.y - b.y);
 }
 
-function attachPointerControls(canvas, rig, { onDoubleTap, onTap, doubleTapMs = 320 } = {}) {
+function attachPointerControls(canvas, rig, { onDoubleTap, onTap, doubleTapMs = 300, now = () => performance.now() } = {}) {
   const pointers = new Map();
   let lastPinchDistance = 0;
   let lastTapAt = 0;
+  let lastTapX = 0;
+  let lastTapY = 0;
   let downAt = 0;
   let downX = 0;
   let downY = 0;
   let moved = 0;
+  let multi = false;      // 这次手势里出现过两根手指 → 不算点击
+  let dragged = false;    // 移动超过阈值 → 不算点击
+
+  // 手指点击的判定：短、稳、单指。阈值比鼠标宽一点，但必须有"按住过"的痕迹。
+  const TAP_MOVE = 14;    // px：手指自然抖动比鼠标大
+  const TAP_TIME = 400;   // ms
+  const TAP_MIN = 25;     // ms：太短的触碰多半是误触
 
   function onPointerDown(e) {
     pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
@@ -2757,19 +2982,14 @@ function attachPointerControls(canvas, rig, { onDoubleTap, onTap, doubleTapMs = 
     rig.touch();
 
     if (pointers.size === 1) {
-      downAt = performance.now();
+      downAt = now();
       downX = e.clientX;
       downY = e.clientY;
       moved = 0;
-
-      // 双击：手机上比"按两次"更自然的是连点两下
-      const now = performance.now();
-      if (now - lastTapAt < doubleTapMs) {
-        onDoubleTap?.();
-        lastTapAt = 0;
-      } else {
-        lastTapAt = now;
-      }
+      multi = false;
+      dragged = false;
+    } else {
+      multi = true;
     }
 
     if (pointers.size === 2) {
@@ -2789,6 +3009,10 @@ function attachPointerControls(canvas, rig, { onDoubleTap, onTap, doubleTapMs = 
 
     if (pointers.size === 1) {
       moved = Math.max(moved, Math.hypot(point.x - downX, point.y - downY));
+      if (moved > TAP_MOVE) {
+        dragged = true;
+        lastTapAt = 0;      // 拖动过就当没点过，避免拖完随手一抬被当成双击
+      }
       // 有手在控制时让位给手势，别两个一起抢
       if (rig.handActive) return;
       rig.nudgeYaw(-(point.x - prev.x));
@@ -2805,12 +3029,30 @@ function attachPointerControls(canvas, rig, { onDoubleTap, onTap, doubleTapMs = 
   }
 
   function onPointerUp(e) {
-    // 轻点（几乎没移动 + 时间短）→ 交给上层做"点相框"
-    if (pointers.size === 1 && moved < 8 && performance.now() - downAt < 350) {
-      onTap?.(e.clientX, e.clientY);
-    }
+    const single = pointers.size === 1;
+    const at = now();
+    const dt = at - downAt;
+
     pointers.delete(e.pointerId);
     if (pointers.size < 2) lastPinchDistance = 0;
+
+    // 只在真正的 pointerup 上判点击；cancel / leave 一律不算
+    if (e.type !== 'pointerup' || !single || multi || dragged) return;
+    if (dt < TAP_MIN || dt > TAP_TIME || moved > TAP_MOVE) return;
+
+    // 交给上层：点到相框就吃掉这次点击（返回 true），不再参与双击切形态
+    const consumed = onTap?.(e.clientX, e.clientY, e.pointerType || 'mouse') === true;
+    if (consumed) { lastTapAt = 0; return; }
+
+    const near = Math.hypot(e.clientX - lastTapX, e.clientY - lastTapY) < 44;
+    if (at - lastTapAt < doubleTapMs && near) {
+      onDoubleTap?.();
+      lastTapAt = 0;
+    } else {
+      lastTapAt = at;
+      lastTapX = e.clientX;
+      lastTapY = e.clientY;
+    }
   }
 
   canvas.addEventListener('pointerdown', onPointerDown);
@@ -2978,6 +3220,7 @@ const T = {
   returnEnd: 14.6,
   hold2End: 15.1,
   fadeEnd: 15.85,
+  cutAt: 12.32,            // 闪屏峰值：这里收尾，交给主场景散开→重组
 };
 
 const VERT = /* glsl */ `
@@ -3028,6 +3271,7 @@ class IntroSequence {
     this.shape = shape;
     this.time = 0;
     this.done = false;
+    this.finished = false;   // true = 自然播到闪屏（不是用户点的跳过）
 
     this.count = cfg.count;
     this.scene = new THREE.Scene();
@@ -3327,6 +3571,12 @@ class IntroSequence {
   }
 
   _step(t) {
+    // 闪屏峰值处收尾：不再播回卷/定格/黑场，后面交给主场景的散开→重组
+    if (t >= T.cutAt) {
+      this.finished = true;
+      this.done = true;
+      return;
+    }
     const n = this.count;
     const P = this.positions;
     const shape = this.shape;
