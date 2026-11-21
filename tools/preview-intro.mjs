@@ -189,7 +189,7 @@ function autoExpose(c) {
   }
   lum.sort((a, b) => a - b);
   const p = lum[Math.min(lum.length - 1, Math.floor(lum.length * 0.995))] || 1;
-  const gain = p > 1 ? 0.85 / p : 1;
+  const gain = p > 1 ? 210 / p : 1;   // 缓冲是 0~255 单位，把 99.5 分位拉到 210 左右
   for (let i = 0; i < c.buf.length; i++) c.buf[i] *= gain;
 }
 
@@ -232,7 +232,7 @@ function renderFrame(env, dust, t, scale = 0.6) {
   const open = dustTiltAt(t);
   const ct = Math.cos(open);
   const st = Math.sin(open);
-  const shrink = 1 - 0.42 * easeInOutCubic(clamp01((p - 0.42) / 0.58));
+  const shrink = 1 - 0.42 * easeInOutCubic(clamp01((t - 2.0) / (GATHER_END - 2.0)));
   const sc = env.scale * shrink;
   const spin = (0.6 + 2.6 * p * p) * Math.min(t, GATHER_END) * 0.5;
   const cs = Math.cos(spin);
@@ -256,7 +256,7 @@ function renderFrame(env, dust, t, scale = 0.6) {
 
     const px = Math.round(((ndcX + 1) / 2) * (W - 1));
     const py = Math.round(((1 - ndcY) / 2) * (H - 1));
-    const v = 2.2 * bright;
+    const v = 120 * bright;
     splat(c, px, py, [v * 1.0, v * 0.86, v * 0.62]);
   }
 

@@ -55,6 +55,7 @@ const VERT = /* glsl */ `
   attribute vec3 aColor;
   attribute float aSize;
   attribute float aSeed;
+  attribute float aRim;
 
   uniform float uK;
   uniform float uSizeScale;
@@ -62,6 +63,7 @@ const VERT = /* glsl */ `
   uniform float uAlpha;
   uniform float uBright;
   uniform float uTime;
+  uniform float uRim;
 
   varying vec3 vColor;
   varying float vAlpha;
@@ -70,12 +72,14 @@ const VERT = /* glsl */ `
     vec4 mv = modelViewMatrix * vec4(position, 1.0);
     gl_Position = projectionMatrix * mv;
 
-    float s = aSize * 0.0086 * uK / max(0.06, -mv.z);
+    // 外沿一圈加大加亮：让「圆环」在远处也能看清边界
+    float rim = smoothstep(0.82, 1.0, aRim) * uRim;
+    float s = aSize * (1.0 + 1.5 * rim) * 0.0086 * uK / max(0.06, -mv.z);
     gl_PointSize = clamp(s, 1.0, 110.0) * uSizeScale;
 
     vec3 gold = vec3(1.0, 0.79, 0.44);
     float tw = 0.88 + 0.12 * sin(uTime * 2.7 + aSeed * 43.0);
-    vColor = mix(gold, aColor, uMix) * uBright * tw;
+    vColor = mix(gold, aColor, uMix) * uBright * tw * (1.0 + 0.9 * rim);
     vAlpha = uAlpha;
   }
 `;
@@ -110,6 +114,7 @@ export class IntroSequence {
     this.scene.add(this.world);
 
     this._buildParticles(shape);
+    this._buildGuide();
     this._buildFireworks();
     this._buildCamera();
     this._buildComposer();
@@ -137,6 +142,7 @@ export class IntroSequence {
     const colors = new Float32Array(n * 3);
     const sizes = new Float32Array(n);
     const seeds = new Float32Array(n);
+    const rims = new Float32Array(n);
 
     const palette = [
       { c: [0.12, 0.55, 0.34], w: 0.34 },
@@ -184,6 +190,7 @@ export class IntroSequence {
       this.dustX[i] = Math.cos(dAng) * dR;
       this.dustZ[i] = Math.sin(dAng) * dR;
       this.dustY[i] = (Math.random() - 0.5) * height * 0.09;
+      rims[i] = Math.min(1, dR / (baseRadius * 4.3));
 
       // --- 爆散方向（略偏镜头） ---
       const a = Math.random() * Math.PI * 2;
@@ -216,6 +223,7 @@ export class IntroSequence {
     geo.setAttribute('aColor', new THREE.BufferAttribute(colors, 3));
     geo.setAttribute('aSize', new THREE.BufferAttribute(sizes, 1));
     geo.setAttribute('aSeed', new THREE.BufferAttribute(seeds, 1));
+    geo.setAttribute('aRim', new THREE.BufferAttribute(rims, 1));
     geo.boundingSphere = new THREE.Sphere(new THREE.Vector3(), 120);
 
     this.uniforms = {
@@ -225,6 +233,7 @@ export class IntroSequence {
       uAlpha: { value: 1 },
       uBright: { value: 1 },
       uTime: { value: 0 },
+      uRim: { value: 0 },
     };
 
     const mat = new THREE.ShaderMaterial({
@@ -246,6 +255,46 @@ export class IntroSequence {
 
     // 爆散的统一尺度：按树底半径换算，树缩放也跟着变
     this.burstUnit = baseRadius * 1.15;
+  }
+
+  /** 开场圆环的"实体描边"：一圈带内/外沿的发光圆环，跟星尘盘同倾角、同缩放 */
+  _buildGuide() {
+    const size = 512;
+    const c = document.createElement('canvas');
+    c.width = c.height = size;
+    const ctx = c.getContext('2d');
+    const cx = size / 2;
+    const g = ctx.createRadialGradient(cx, cx, 0, cx, cx, cx);
+    g.addColorStop(0.00, 'rgba(255,220,150,0)');
+    g.addColorStop(0.36, 'rgba(255,220,150,0)');
+    g.addColorStop(0.43, 'rgba(255,226,170,0.30)');   // 内沿，勾出"洞"
+    g.addColorStop(0.50, 'rgba(255,226,170,0.05)');
+    g.addColorStop(0.84, 'rgba(255,214,140,0)');
+    g.addColorStop(0.92, 'rgba(255,236,190,0.95)');   // 外沿，主圆
+    g.addColorStop(0.965, 'rgba(255,205,120,0.30)');
+    g.addColorStop(1.00, 'rgba(255,205,120,0)');
+    ctx.fillStyle = g;
+    ctx.beginPath();
+    ctx.arc(cx, cx, cx, 0, Math.PI * 2);
+    ctx.fill();
+
+    const tex = new THREE.CanvasTexture(c);
+    tex.colorSpace = THREE.SRGBColorSpace;
+    const mat = new THREE.MeshBasicMaterial({
+      map: tex,
+      transparent: true,
+      opacity: 0,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+      depthTest: false,
+      side: THREE.DoubleSide,
+      toneMapped: false,
+    });
+    this.guide = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), mat);
+    this.guide.renderOrder = 2;
+    this.guide.rotation.x = -Math.PI / 2 + DUST_TILT_TARGET;
+    this.guide.scale.setScalar(this.dustFit || 1);
+    this.world.add(this.guide);
   }
 
   _buildFireworks() {
@@ -343,6 +392,7 @@ export class IntroSequence {
       },
     );
     this.dustScale = fit / maxDustR;
+    this.dustFit = fit;
     this.dustCos = Math.cos(this.dustTiltTarget);   // 帧级的常量，别每帧再算
     this.dustSin = Math.sin(this.dustTiltTarget);
   }
@@ -418,6 +468,10 @@ export class IntroSequence {
     const spin = this._spin(t);                    // 星尘盘自转
     const cs = Math.cos(spin);
     const sn = Math.sin(spin);
+    // 圆环阶段：外沿高亮 + 轻微放大，让「圈」看得出来
+    const rimK = t < T.gatherEnd
+      ? clamp01((t - 0.6) / 0.5) * (1 - clamp01((t - 2.55) / 0.5))
+      : 0;
 
     if (t < T.gatherEnd) {
       // A. 星尘汇聚：张开 + 自转 + 后段收缩，纯加减乘，无逐粒子三角函数
@@ -427,7 +481,8 @@ export class IntroSequence {
       const ct = Math.cos(open);
       const st = Math.sin(open);
       // 收缩留到最后 58% 才发生，环先完整地开出来
-      const shrink = 1 - 0.42 * easeInOutCubic(clamp01((p - 0.42) / 0.58));
+      // 环在 1.75s 完全张开，先完整停留 0.25s，再开始收缩（否则永远看不到完整的圆）
+      const shrink = 1 - 0.42 * easeInOutCubic(clamp01((t - 2.0) / (T.gatherEnd - 2.0)));
       const sc = this.dustScale * shrink;
       for (let i = 0; i < n; i++) {
         const i3 = i * 3;
@@ -441,7 +496,10 @@ export class IntroSequence {
         P[i3 + 2] = y0 * st + z * ct;
       }
       mix = 0;
-      bright = 0.9 + 0.3 * p;
+      bright = 0.95 + 0.35 * p;
+      sizeScale = 1 + 0.2 * rimK;
+      this._guideOpen = open;
+      this._guideScale = this.dustFit * shrink;
     } else if (t < T.riseEnd) {
       // B. 螺旋垒树：按高度分配延迟 + 全局额外旋转
       const p = shiftProgress(t, T.gatherEnd, T.riseEnd);
@@ -565,6 +623,17 @@ export class IntroSequence {
     this.uniforms.uAlpha.value = alpha;
     this.uniforms.uBright.value = bright;
     this.uniforms.uTime.value = t;
+    // 圆环阶段开启外沿高亮，进入垒树后关掉
+    this.uniforms.uRim.value = rimK;
+
+    if (this.guide) {
+      const show = t < T.gatherEnd
+        ? clamp01((t - 0.35) / 0.45) * (1 - clamp01((t - 2.3) / 0.5))
+        : 0;
+      this.guide.material.opacity = 0.95 * show;
+      this.guide.rotation.x = -Math.PI / 2 + (this._guideOpen ?? DUST_TILT_TARGET);
+      this.guide.scale.setScalar(this._guideScale || this.dustFit || 1);
+    }
     this.uniforms.uK.value = this._pointK();
 
     this.geometry.attributes.position.needsUpdate = true;
@@ -690,6 +759,12 @@ export class IntroSequence {
     this.world.remove(this.points);
     this.geometry.dispose();
     this.points.material.dispose();
+    if (this.guide) {
+      this.world.remove(this.guide);
+      this.guide.geometry.dispose();
+      this.guide.material.map?.dispose();
+      this.guide.material.dispose();
+    }
     this.world.remove(this.fire.points);
     this.fire.geo.dispose();
     this.fire.points.material.dispose();
