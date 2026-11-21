@@ -60,6 +60,12 @@ export const CONFIG = {
     holdTime: 0.3,     // 手势保持多久才切换形态（秒），防止误触
   },
 
+  ribbon: {
+    count: 9000,          // 规格 8000~12000；手机上会在 main.js 里降到 5000
+    colorA: 0xa8e6ff,     // 冰蓝（想跟主体融合可换成 0xffd9a0 香槟金）
+    colorB: 0xffffff,     // 过渡到白
+  },
+
   photos: {
     max: 12,           // 最多放几张照片
     defaultCount: 6,   // 没上传时用程序生成的装饰品

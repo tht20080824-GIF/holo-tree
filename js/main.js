@@ -24,6 +24,7 @@ if (isTouchDevice || isSmallScreen) {
   CONFIG.quality.snowCount = 420;
   CONFIG.quality.maxPixelRatio = 1.75;  // 手机上 3x DPR 会直接掉到 20fps
   CONFIG.photos.defaultCount = 5;
+  CONFIG.ribbon.count = 5000;   // 光带也要降，否则手机掉帧
 }
 
 // ---------------------------------------------------------------- 全局错误兜底

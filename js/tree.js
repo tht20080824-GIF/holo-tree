@@ -18,6 +18,7 @@ import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 
 import { CONFIG } from './config.js';
 import { buildTreeLayout } from './layout.js';
+import { createRibbon } from './ribbon.js';
 import { MODE } from './gesture.js';
 
 const TMP_OBJ = new THREE.Object3D();
@@ -134,6 +135,7 @@ export class HoloTree {
     this._initRenderer();
     this._initScene();
     this._initParticles();
+    this._initRibbon();
     this._initDecor();
     this._initSnow();
     this._initStar();
@@ -250,6 +252,22 @@ export class HoloTree {
 
     this.particles.instanceColor.needsUpdate = true;
     this.treeRoot.add(this.particles);
+  }
+
+  /** 环绕光带：挂在 treeRoot 下，这样手势转向时会跟着一起转 */
+  _initRibbon() {
+    const { height, floorY, radius } = this.cfg.particles;
+    this.ribbon = createRibbon({
+      count: this.cfg.ribbon.count,
+      height,
+      floorY,
+      baseRadius: radius,
+      colorA: this.cfg.ribbon.colorA,
+      colorB: this.cfg.ribbon.colorB,
+    });
+    this.treeRoot.add(this.ribbon.points);
+
+    this._ribbonOpacity = 1; // 散开态时淡出
   }
 
   _initDecor() {
@@ -650,6 +668,11 @@ export class HoloTree {
     this._updateSnow(dt);
     this._updateBursts(dt);
     this._updateFocus(dt);
+
+    // 光带：树形态下常亮，散开后淡出，避免和爆炸的粒子糊成一团
+    const ribbonTarget = this.mode === MODE.TREE ? 1 : 0;
+    this._ribbonOpacity += (ribbonTarget - this._ribbonOpacity) * (1 - Math.exp(-4 * dt));
+    this.ribbon.update(dt, this.camera, this.renderer.getPixelRatio(), this._ribbonOpacity);
 
     this.composer.render();
   }
