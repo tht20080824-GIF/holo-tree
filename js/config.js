@@ -66,6 +66,17 @@ export const CONFIG = {
     colorB: 0xffffff,     // 过渡到白
   },
 
+  ornaments: {
+    gifts: 5,
+    bows: 4,
+    giftSize: 0.78,
+    bowSize: 0.85,
+    // 颜色全部取自现有调色板，不引入新色系
+    giftColors: [0x103f2c, 0x6f1b25, 0x16202e],
+    bowColors: [0xd9b264, 0x8e1f2f],
+    ribbonColor: 0xd9b264,
+  },
+
   photos: {
     max: 12,           // 最多放几张照片
     defaultCount: 6,   // 没上传时用程序生成的装饰品

@@ -466,7 +466,7 @@ body.ui-hidden #debug { opacity: 0; pointer-events: none; }
 
   <div id="toast"></div>
 
-  <script>window.__HOLO_NO_VENDOR__ = true; window.__HOLO_BUILD__ = "2026-11-21T18:39:21.986Z";</script>
+  <script>window.__HOLO_NO_VENDOR__ = true; window.__HOLO_BUILD__ = "2026-11-21T18:44:29.747Z";</script>
 <script>
 /* 由 tools/bundle.mjs 生成 —— 不要手改，改源码后重新构建 */
 (function () {
@@ -506,6 +506,8 @@ if (isTouchDevice || isSmallScreen) {
   CONFIG.quality.maxPixelRatio = 1.75;  // 手机上 3x DPR 会直接掉到 20fps
   CONFIG.photos.defaultCount = 5;
   CONFIG.ribbon.count = 5000;   // 光带也要降，否则手机掉帧
+  CONFIG.ornaments.gifts = 3;
+  CONFIG.ornaments.bows = 2;
 }
 
 // ---------------------------------------------------------------- 全局错误兜底
@@ -1016,6 +1018,17 @@ const CONFIG = {
     colorB: 0xffffff,     // 过渡到白
   },
 
+  ornaments: {
+    gifts: 5,
+    bows: 4,
+    giftSize: 0.78,
+    bowSize: 0.85,
+    // 颜色全部取自现有调色板，不引入新色系
+    giftColors: [0x103f2c, 0x6f1b25, 0x16202e],
+    bowColors: [0xd9b264, 0x8e1f2f],
+    ribbonColor: 0xd9b264,
+  },
+
   photos: {
     max: 12,           // 最多放几张照片
     defaultCount: 6,   // 没上传时用程序生成的装饰品
@@ -1441,6 +1454,7 @@ const { RoomEnvironment } = __require("vendor/three-addons/environments/RoomEnvi
 const { CONFIG } = __require("js/config.js");
 const { buildTreeLayout } = __require("js/layout.js");
 const { createRibbon } = __require("js/ribbon.js");
+const { createOrnamentSet } = __require("js/ornaments.js");
 const { MODE } = __require("js/gesture.js");
 
 const TMP_OBJ = new THREE.Object3D();
@@ -1558,6 +1572,7 @@ class HoloTree {
     this._initScene();
     this._initParticles();
     this._initRibbon();
+    this._initOrnaments();
     this._initDecor();
     this._initSnow();
     this._initStar();
@@ -1690,6 +1705,16 @@ class HoloTree {
     this.treeRoot.add(this.ribbon.points);
 
     this._ribbonOpacity = 1; // 散开态时淡出
+  }
+
+  /** 圣诞装饰：小礼盒 + 蝴蝶结，数量克制，挂在树身外侧 */
+  _initOrnaments() {
+    const { height, floorY, radius } = this.cfg.particles;
+    this.ornamentSet = createOrnamentSet({
+      cfg: this.cfg.ornaments,
+      shape: { height, floorY, baseRadius: radius },
+    });
+    this.treeRoot.add(this.ornamentSet.group);
   }
 
   _initDecor() {
@@ -2095,6 +2120,7 @@ class HoloTree {
     const ribbonTarget = this.mode === MODE.TREE ? 1 : 0;
     this._ribbonOpacity += (ribbonTarget - this._ribbonOpacity) * (1 - Math.exp(-4 * dt));
     this.ribbon.update(dt, this.camera, this.renderer.getPixelRatio(), this._ribbonOpacity);
+    this.ornamentSet.update(dt, this.time);
 
     this.composer.render();
   }
@@ -57256,6 +57282,176 @@ function createRibbon({
 
 __exports["createRibbon"] = createRibbon;
   };
+  __defs["js/ornaments.js"] = function (__require, __exports) {
+/**
+ * 圣诞装饰：小礼盒 + 蝴蝶结。
+ *
+ * 设计原则（对应"美观但不廉价"）：
+ * - 数量克制：礼盒 5 个、蝴蝶结 4 个；
+ * - 只挂在树身外侧 1.16 倍半径处，不挡主体、不穿模；
+ * - 材质走"绒面 + 金属丝带"，靠材质反射出质感，而不是靠发光；
+ * - 颜色全部取自现有调色板（深绿 / 酒红 / 墨蓝 + 香槟金），不引入新色系。
+ */
+
+const THREE = __require("vendor/three.module.js");
+const { placeOrnaments } = __require("js/ornament-math.js");
+
+/** 蝴蝶结：两个压扁的环 + 结心 + 两条飘带 */
+function createBow({ scale = 1, color = 0xd9b264, sheen = 0xa8874a } = {}) {
+  const group = new THREE.Group();
+
+  const material = new THREE.MeshPhysicalMaterial({
+    color,
+    metalness: 0.35,
+    roughness: 0.32,
+    sheen: 0.6,
+    sheenColor: new THREE.Color(sheen),
+    sheenRoughness: 0.5,
+  });
+
+  const loopGeo = new THREE.TorusGeometry(0.15, 0.042, 10, 26);
+  for (const dir of [-1, 1]) {
+    const loop = new THREE.Mesh(loopGeo, material);
+    loop.scale.set(1, 0.62, 0.42);
+    loop.rotation.z = dir * 0.52;
+    loop.position.set(dir * 0.13, 0.01, 0);
+    group.add(loop);
+  }
+
+  // 结心
+  const knot = new THREE.Mesh(new THREE.SphereGeometry(0.07, 12, 10), material);
+  knot.scale.set(1, 0.85, 0.9);
+  group.add(knot);
+
+  // 飘带
+  const tailGeo = new THREE.BoxGeometry(0.055, 0.26, 0.018);
+  for (const dir of [-1, 1]) {
+    const tail = new THREE.Mesh(tailGeo, material);
+    tail.position.set(dir * 0.06, -0.19, 0);
+    tail.rotation.z = dir * 0.22;
+    group.add(tail);
+  }
+
+  group.scale.setScalar(scale);
+  return group;
+}
+
+/** 小礼盒：盒身 + 盒盖 + 十字丝带 + 顶部蝴蝶结 */
+function createGiftBox({
+  size = 0.7,
+  bodyColor = 0x103f2c,
+  ribbonColor = 0xd9b264,
+} = {}) {
+  const group = new THREE.Group();
+
+  const bodyMat = new THREE.MeshPhysicalMaterial({
+    color: bodyColor,
+    metalness: 0.15,
+    roughness: 0.62,
+    sheen: 0.5,
+    sheenColor: new THREE.Color(0xffffff),
+    sheenRoughness: 0.7,
+  });
+  const ribbonMat = new THREE.MeshStandardMaterial({
+    color: ribbonColor,
+    metalness: 0.85,
+    roughness: 0.26,
+  });
+
+  const h = size * 0.72;
+  const body = new THREE.Mesh(new THREE.BoxGeometry(size, h, size), bodyMat);
+  body.position.y = h / 2;
+  group.add(body);
+
+  // 盒盖略大一圈，边缘才不像个纯色方块
+  const lid = new THREE.Mesh(new THREE.BoxGeometry(size * 1.07, size * 0.09, size * 1.07), bodyMat);
+  lid.position.y = h + size * 0.045;
+  group.add(lid);
+
+  // 十字丝带
+  const bandH = new THREE.Mesh(new THREE.BoxGeometry(size * 1.09, h * 1.02, size * 0.14), ribbonMat);
+  bandH.position.y = h / 2;
+  group.add(bandH);
+
+  const bandV = new THREE.Mesh(new THREE.BoxGeometry(size * 0.14, h * 1.02, size * 1.09), ribbonMat);
+  bandV.position.y = h / 2;
+  group.add(bandV);
+
+  const bow = createBow({ scale: size * 0.62, color: ribbonColor });
+  bow.position.y = h + size * 0.1;
+  group.add(bow);
+
+  return group;
+}
+
+/**
+ * 一整组装饰：按摆放算法挂在树身外侧。
+ * @returns {{group: THREE.Group, update: (dt:number, time:number) => void}}
+ */
+function createOrnamentSet({ cfg, shape }) {
+  const group = new THREE.Group();
+  const items = [];
+
+  const gifts = placeOrnaments({
+    count: cfg.gifts,
+    height: shape.height,
+    floorY: shape.floorY,
+    baseRadius: shape.baseRadius,
+    tMin: 0.16,
+    tMax: 0.58,      // 礼盒压在中下部，不抢顶部
+    clearance: 1.16,
+  });
+
+  const bows = placeOrnaments({
+    count: cfg.bows,
+    height: shape.height,
+    floorY: shape.floorY,
+    baseRadius: shape.baseRadius,
+    tMin: 0.42,
+    tMax: 0.84,      // 蝴蝶结偏上，形成节奏
+    clearance: 1.18,
+  });
+
+  const giftColors = cfg.giftColors;
+  gifts.forEach((spot, i) => {
+    const node = createGiftBox({
+      size: cfg.giftSize * spot.scale,
+      bodyColor: giftColors[i % giftColors.length],
+      ribbonColor: cfg.ribbonColor,
+    });
+    node.position.set(spot.position.x, spot.position.y, spot.position.z);
+    node.rotation.y = spot.yaw;
+    node.rotation.z = spot.tilt * 0.5;
+    group.add(node);
+    items.push({ node, baseY: spot.position.y, phase: spot.phase, amp: 0.16 });
+  });
+
+  const bowColors = cfg.bowColors;
+  bows.forEach((spot, i) => {
+    const node = createBow({ scale: cfg.bowSize * spot.scale, color: bowColors[i % bowColors.length] });
+    node.position.set(spot.position.x, spot.position.y, spot.position.z);
+    node.rotation.y = spot.yaw;
+    node.rotation.z = spot.tilt;
+    group.add(node);
+    items.push({ node, baseY: spot.position.y, phase: spot.phase, amp: 0.22 });
+  });
+
+  return {
+    group,
+    items,
+    update(dt, time) {
+      for (const item of items) {
+        // 极轻的上下浮动，幅度 <0.25 单位，避免"挂件乱晃"
+        item.node.position.y = item.baseY + Math.sin(time * 0.9 + item.phase) * item.amp;
+      }
+    },
+  };
+}
+
+__exports["createBow"] = createBow;
+__exports["createGiftBox"] = createGiftBox;
+__exports["createOrnamentSet"] = createOrnamentSet;
+  };
   __defs["vendor/three-addons/shaders/CopyShader.js"] = function (__require, __exports) {
 /**
  * Full-screen textured quad shader
@@ -57805,6 +58001,72 @@ __exports["TAPER_EXPONENT"] = TAPER_EXPONENT;
 __exports["RIBBON_TURNS"] = RIBBON_TURNS;
 __exports["RIBBON_TOP_RATIO"] = RIBBON_TOP_RATIO;
 __exports["RIBBON_RADIUS_FACTOR"] = RIBBON_RADIUS_FACTOR;
+  };
+  __defs["js/ornament-math.js"] = function (__require, __exports) {
+/**
+ * 装饰物的摆放算法（纯函数，可单测）。
+ *
+ * 原则：挂在树身外侧一点点（不穿模、不悬空），高度错开，角度用黄金角散开，
+ * 避免"一排挂在同一高度"的廉价感。
+ */
+
+const { trunkRadius } = __require("js/ribbon-math.js");
+
+const GOLDEN_ANGLE = 2.399963;
+
+/**
+ * @param {object} opts
+ * @param {number} opts.count 数量
+ * @param {number} opts.height 树高
+ * @param {number} opts.floorY 树底 y
+ * @param {number} opts.baseRadius 树底半径
+ * @param {number} opts.tMin 最低高度（0~1）
+ * @param {number} opts.tMax 最高高度
+ * @param {number} opts.clearance 相对树身半径的外扩倍数
+ * @param {() => number} opts.rng
+ */
+function placeOrnaments({
+  count,
+  height,
+  floorY,
+  baseRadius,
+  tMin = 0.14,
+  tMax = 0.86,
+  clearance = 1.16,
+  rng = Math.random,
+} = {}) {
+  const items = [];
+
+  for (let i = 0; i < count; i++) {
+    // 均匀铺开再抖一点，避免等距排列的死板
+    const base = count === 1 ? 0.5 : i / (count - 1);
+    const t = tMin + (tMax - tMin) * (base * 0.86 + rng() * 0.14);
+
+    const angle = i * GOLDEN_ANGLE + rng() * 0.5;
+    const r = trunkRadius(t, baseRadius) * (clearance + rng() * 0.06);
+    const y = floorY + height * t;
+
+    items.push({
+      t,
+      angle,
+      radius: r,
+      position: {
+        x: Math.cos(angle) * r,
+        y: y + (rng() - 0.5) * 0.4,
+        z: Math.sin(angle) * r,
+      },
+      // 朝外，并带一点随机倾斜，看着是"挂"上去的而不是贴纸
+      yaw: Math.atan2(Math.cos(angle) * r, Math.sin(angle) * r),
+      tilt: (rng() - 0.5) * 0.35,
+      scale: 0.78 + rng() * 0.4,
+      phase: rng() * Math.PI * 2,
+    });
+  }
+
+  return items;
+}
+
+__exports["placeOrnaments"] = placeOrnaments;
   };
   __require("js/main.js");
 })();

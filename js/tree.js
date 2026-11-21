@@ -19,6 +19,7 @@ import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { CONFIG } from './config.js';
 import { buildTreeLayout } from './layout.js';
 import { createRibbon } from './ribbon.js';
+import { createOrnamentSet } from './ornaments.js';
 import { MODE } from './gesture.js';
 
 const TMP_OBJ = new THREE.Object3D();
@@ -136,6 +137,7 @@ export class HoloTree {
     this._initScene();
     this._initParticles();
     this._initRibbon();
+    this._initOrnaments();
     this._initDecor();
     this._initSnow();
     this._initStar();
@@ -268,6 +270,16 @@ export class HoloTree {
     this.treeRoot.add(this.ribbon.points);
 
     this._ribbonOpacity = 1; // 散开态时淡出
+  }
+
+  /** 圣诞装饰：小礼盒 + 蝴蝶结，数量克制，挂在树身外侧 */
+  _initOrnaments() {
+    const { height, floorY, radius } = this.cfg.particles;
+    this.ornamentSet = createOrnamentSet({
+      cfg: this.cfg.ornaments,
+      shape: { height, floorY, baseRadius: radius },
+    });
+    this.treeRoot.add(this.ornamentSet.group);
   }
 
   _initDecor() {
@@ -673,6 +685,7 @@ export class HoloTree {
     const ribbonTarget = this.mode === MODE.TREE ? 1 : 0;
     this._ribbonOpacity += (ribbonTarget - this._ribbonOpacity) * (1 - Math.exp(-4 * dt));
     this.ribbon.update(dt, this.camera, this.renderer.getPixelRatio(), this._ribbonOpacity);
+    this.ornamentSet.update(dt, this.time);
 
     this.composer.render();
   }
