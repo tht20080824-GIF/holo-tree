@@ -532,7 +532,7 @@ body.ui-hidden #debug { opacity: 0; pointer-events: none; }
       <span>＋</span> 加照片
       <input id="file-input" type="file" accept="image/*" multiple hidden />
     </label>
-    <div class="hint-mini">按 H 隐藏界面 · 空格撒花</div>
+    <div class="hint-mini">按 H 隐藏界面 · 空格撒花 · R 重播开场</div>
   </div>
 
   <!-- 左下操作说明 -->
@@ -543,6 +543,7 @@ body.ui-hidden #debug { opacity: 0; pointer-events: none; }
       <li><b>手靠近镜头</b> 拉近，远离拉远</li>
       <li><b>五指张开</b> 散开 · <b>握拳</b> 合拢</li>
       <li><b>拇指食指捏合</b> 撒一把金粒子</li>
+      <li><b>按 R</b> 重播开场动画</li>
     </ul>
     <div class="legend-foot">没有摄像头？鼠标拖拽 + 滚轮同样能玩</div>
   </div>
@@ -566,7 +567,7 @@ body.ui-hidden #debug { opacity: 0; pointer-events: none; }
 
   <div id="toast"></div>
 
-  <script>window.__HOLO_NO_VENDOR__ = true; window.__HOLO_BUILD__ = "2026-11-21T19:48:56.221Z";</script>
+  <script>window.__HOLO_NO_VENDOR__ = true; window.__HOLO_BUILD__ = "2026-11-21T19:53:19.489Z";</script>
 <script>
 /* 由 tools/bundle.mjs 生成 —— 不要手改，改源码后重新构建 */
 (function () {
@@ -683,29 +684,33 @@ let introStarted = false;
 let introHoldStart = 0;
 let cameraSettled = false;
 
+function mountIntro() {
+  intro = new IntroSequence({
+    shape: {
+      height: CONFIG.particles.height,
+      floorY: CONFIG.particles.floorY,
+      baseRadius: CONFIG.particles.radius,
+    },
+    cfg: CONFIG.intro,
+    renderer: tree.renderer,
+  });
+
+  const skip = document.createElement('button');
+  skip.id = 'intro-skip';
+  skip.type = 'button';
+  skip.textContent = '直接开始';
+  skip.addEventListener('click', () => {
+    if (!intro) return;
+    if (!introStarted) startIntro();
+    else intro.done = true;
+  });
+  document.body.appendChild(skip);
+  intro.skipButton = skip;
+}
+
 if (CONFIG.intro.enabled) {
   try {
-    intro = new IntroSequence({
-      shape: {
-        height: CONFIG.particles.height,
-        floorY: CONFIG.particles.floorY,
-        baseRadius: CONFIG.particles.radius,
-      },
-      cfg: CONFIG.intro,
-      renderer: tree.renderer,
-    });
-
-    const skip = document.createElement('button');
-    skip.id = 'intro-skip';
-    skip.type = 'button';
-    skip.textContent = '直接开始';
-    skip.addEventListener('click', () => {
-      if (!intro) return;
-      if (!introStarted) startIntro();
-      else intro.done = true;
-    });
-    document.body.appendChild(skip);
-    intro.skipButton = skip;
+    mountIntro();
   } catch (err) {
     console.warn('[intro] 开场初始化失败，直接进入交互模式：', err);
     intro = null;
@@ -727,6 +732,31 @@ function endIntro() {
   intro.dispose();
   intro = null;
   els.loader.classList.add('hidden');
+}
+
+// 按 R：把当前这条序列丢掉，重建一条，从头再放一遍（播到一半按也生效）
+function replayIntro() {
+  if (!CONFIG.intro.enabled) {
+    toast('开场动画已关闭');
+    return;
+  }
+  if (intro) {
+    intro.skipButton?.remove();
+    intro.dispose();
+    intro = null;
+  }
+  try {
+    mountIntro();
+  } catch (err) {
+    console.warn('[intro] 重播失败：', err);
+    intro = null;
+    toast('开场重播失败');
+    return;
+  }
+  introStarted = false;
+  introHoldStart = 0;
+  startIntro();
+  toast('重播开场');
 }
 
 // ------------------------------------------------------------------ 照片聚焦
@@ -822,6 +852,7 @@ window.addEventListener('keydown', (e) => {
     e.preventDefault();
     fireBurst();
   }
+  if (key === 'r') replayIntro();
   if (key === 'c') els.camPanel.classList.toggle('hidden');
 });
 

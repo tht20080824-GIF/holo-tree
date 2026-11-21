@@ -43,3 +43,11 @@ test('开场：使用预计算数组（treeX/dustX/bDir）而不是每帧推导'
     assert.ok(src.includes(`this.${name} = new Float32Array`), `缺少预计算数组 ${name}`);
   }
 });
+
+test('开场：按 R 能重播（重播要重建序列，不能复用已 done 的那条）', () => {
+  const main = fs.readFileSync(path.join(root, 'js/main.js'), 'utf8');
+  assert.ok(main.includes('function replayIntro('), '缺少 replayIntro()');
+  assert.ok(main.includes("key === 'r'"), '键盘没有绑定 R');
+  assert.ok(main.includes('mountIntro()'), '重播没有重建序列');
+  assert.ok(main.includes('intro.dispose()'), '重播前没有释放旧序列');
+});

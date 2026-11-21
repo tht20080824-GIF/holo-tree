@@ -102,29 +102,33 @@ let introStarted = false;
 let introHoldStart = 0;
 let cameraSettled = false;
 
+function mountIntro() {
+  intro = new IntroSequence({
+    shape: {
+      height: CONFIG.particles.height,
+      floorY: CONFIG.particles.floorY,
+      baseRadius: CONFIG.particles.radius,
+    },
+    cfg: CONFIG.intro,
+    renderer: tree.renderer,
+  });
+
+  const skip = document.createElement('button');
+  skip.id = 'intro-skip';
+  skip.type = 'button';
+  skip.textContent = '直接开始';
+  skip.addEventListener('click', () => {
+    if (!intro) return;
+    if (!introStarted) startIntro();
+    else intro.done = true;
+  });
+  document.body.appendChild(skip);
+  intro.skipButton = skip;
+}
+
 if (CONFIG.intro.enabled) {
   try {
-    intro = new IntroSequence({
-      shape: {
-        height: CONFIG.particles.height,
-        floorY: CONFIG.particles.floorY,
-        baseRadius: CONFIG.particles.radius,
-      },
-      cfg: CONFIG.intro,
-      renderer: tree.renderer,
-    });
-
-    const skip = document.createElement('button');
-    skip.id = 'intro-skip';
-    skip.type = 'button';
-    skip.textContent = '直接开始';
-    skip.addEventListener('click', () => {
-      if (!intro) return;
-      if (!introStarted) startIntro();
-      else intro.done = true;
-    });
-    document.body.appendChild(skip);
-    intro.skipButton = skip;
+    mountIntro();
   } catch (err) {
     console.warn('[intro] 开场初始化失败，直接进入交互模式：', err);
     intro = null;
@@ -146,6 +150,31 @@ function endIntro() {
   intro.dispose();
   intro = null;
   els.loader.classList.add('hidden');
+}
+
+// 按 R：把当前这条序列丢掉，重建一条，从头再放一遍（播到一半按也生效）
+function replayIntro() {
+  if (!CONFIG.intro.enabled) {
+    toast('开场动画已关闭');
+    return;
+  }
+  if (intro) {
+    intro.skipButton?.remove();
+    intro.dispose();
+    intro = null;
+  }
+  try {
+    mountIntro();
+  } catch (err) {
+    console.warn('[intro] 重播失败：', err);
+    intro = null;
+    toast('开场重播失败');
+    return;
+  }
+  introStarted = false;
+  introHoldStart = 0;
+  startIntro();
+  toast('重播开场');
 }
 
 // ------------------------------------------------------------------ 照片聚焦
@@ -241,6 +270,7 @@ window.addEventListener('keydown', (e) => {
     e.preventDefault();
     fireBurst();
   }
+  if (key === 'r') replayIntro();
   if (key === 'c') els.camPanel.classList.toggle('hidden');
 });
 
