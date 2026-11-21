@@ -83,9 +83,12 @@ body.ui-hidden #tools,
 body.ui-hidden #cam-panel,
 body.ui-hidden #debug { opacity: 0; pointer-events: none; }
 
-/* 开场播放时把底部面板收起来：手机上文字就在底部，不收会叠在一起 */
-body.intro-on #legend,
-body.intro-on #cam-panel { opacity: 0; pointer-events: none; }
+/* 开场播放时把底部面板收起来 —— 只在窄屏 / 触屏上生效：
+   桌面宽屏文字居中且窄，和左右面板本来就不重叠，保持原样不动 */
+@media (max-width: 720px), (pointer: coarse) {
+  body.intro-on #legend,
+  body.intro-on #cam-panel { opacity: 0; pointer-events: none; }
+}
 
 #hud, #legend, #tools, #cam-panel, #debug { transition: opacity 0.35s ease; }
 
@@ -596,7 +599,7 @@ body.intro-on #cam-panel { opacity: 0; pointer-events: none; }
 
   <div id="toast"></div>
 
-  <script>window.__HOLO_NO_VENDOR__ = true; window.__HOLO_BUILD__ = "2026-11-21T19:57:16.249Z";</script>
+  <script>window.__HOLO_NO_VENDOR__ = true; window.__HOLO_BUILD__ = "2026-11-21T20:01:05.328Z";</script>
 <script>
 /* 由 tools/bundle.mjs 生成 —— 不要手改，改源码后重新构建 */
 (function () {
