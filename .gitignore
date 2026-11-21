@@ -1,0 +1,15 @@
+# 依赖（18MB，可随时用 tools/fetch-vendor.sh 重新拉）
+vendor/
+
+# 构建产物：单文件版和 CDN 版会随源码重建，不入库
+dist-cdn/
+
+# 证书私钥，绝对不能进仓库
+*.pem
+*.key
+.ca-key.pem
+.lan-key.pem
+
+# 系统文件
+.DS_Store
+node_modules/

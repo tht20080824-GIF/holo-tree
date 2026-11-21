@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <title>HOLO TREE · 手势圣诞树</title>
+  <link rel="icon" href="data:," />
+  <meta name="description" content="用摄像头手势控制的 3D 粒子圣诞树" />
+  <link rel="stylesheet" href="./css/app.css" />
+
+  <!-- three.js 全部走本地 vendor，不依赖外网 CDN -->
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "./vendor/three.module.js",
+      "three/addons/": "./vendor/three-addons/"
+    }
+  }
+  </script>
+</head>
+<body>
+  <div id="app"></div>
+
+  <!-- 加载遮罩：首帧渲染完就淡出 -->
+  <div id="loader">
+    <div class="loader-ring"></div>
+    <div id="loader-text">正在点亮圣诞树</div>
+  </div>
+
+  <!-- 左上 HUD -->
+  <div id="hud">
+    <div class="brand">
+      <span class="brand-mark">✳</span>
+      <span class="brand-name">HOLO TREE</span>
+      <span class="brand-ver">v1.0</span>
+    </div>
+    <div class="hud-row"><span class="hud-key">状态</span><span id="status">初始化…</span></div>
+    <div class="hud-row"><span class="hud-key">手势</span><span id="gesture">未检测到手</span></div>
+    <div class="hud-row"><span class="hud-key">形态</span><span id="mode">合拢</span></div>
+  </div>
+
+  <!-- 右上工具 -->
+  <div id="tools">
+    <label class="btn" for="file-input" title="加入自己的照片">
+      <span>＋</span> 加照片
+      <input id="file-input" type="file" accept="image/*" multiple hidden />
+    </label>
+    <div class="hint-mini">按 H 隐藏界面 · 空格撒花</div>
+  </div>
+
+  <!-- 左下操作说明 -->
+  <div id="legend">
+    <div class="legend-title">怎么玩</div>
+    <ul>
+      <li><b>移动手掌</b> 左右转 / 上下抬</li>
+      <li><b>手靠近镜头</b> 拉近，远离拉远</li>
+      <li><b>五指张开</b> 散开 · <b>握拳</b> 合拢</li>
+      <li><b>拇指食指捏合</b> 撒一把金粒子</li>
+    </ul>
+    <div class="legend-foot">没有摄像头？鼠标拖拽 + 滚轮同样能玩</div>
+  </div>
+
+  <!-- 右下摄像头预览 -->
+  <div id="cam-panel">
+    <div class="cam-head">
+      <span class="cam-dot"></span>
+      <span>CAM</span>
+    </div>
+    <video id="cam-video" playsinline muted></video>
+    <canvas id="cam-canvas" width="160" height="120"></canvas>
+    <div class="cam-tip">按 C 收起</div>
+  </div>
+
+  <!-- 手势指示点 -->
+  <div id="hand-dot"></div>
+
+  <!-- 调试面板（按 D） -->
+  <div id="debug">按 D 打开调试信息</div>
+
+  <div id="toast"></div>
+
+  <script type="module" src="./js/main.js"></script>
+</body>
+</html>

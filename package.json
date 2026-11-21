@@ -1,0 +1,13 @@
+{
+  "name": "xmas-tree-holo",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "手势控制的 3D 粒子圣诞树（自研版本）",
+  "scripts": {
+    "start": "python3 -m http.server 8767",
+    "test": "node --test tests/*.test.mjs",
+    "verify": "node tools/verify.mjs",
+    "vendor": "bash tools/fetch-vendor.sh"
+  }
+}
