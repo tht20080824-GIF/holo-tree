@@ -215,7 +215,8 @@ export function fitDustRadius(cam, {
  * 恰好等于 sin(倾斜角)（aspect 会在 NDC 里抵消掉），所以 22° 在任何画幅
  * 上看起来都是同一个比例 —— 不需要按画幅去改。
  */
-export const DUST_TILT_TARGET = (30 * Math.PI) / 180;
+// 参考视频里的圆是「正对镜头」的盘：盘面要立起来（90°），原来 30° 是躺着的椭圆
+export const DUST_TILT_TARGET = (88 * Math.PI) / 180;
 
 /** 开场「张开」的起点：几乎平躺，对应参考画面 1.0s 时那条横带 */
 export const DUST_OPEN_FROM = (13 * Math.PI) / 180;

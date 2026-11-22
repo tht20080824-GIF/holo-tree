@@ -50,6 +50,31 @@ export function buildTreeLayout(count, shape, rng = Math.random) {
   return { tree, scatter, seed, size };
 }
 
+/**
+ * 从散开球壳里取 n 个落点（每个轴带 jitter 抖动）。
+ *
+ * 文字粒子有上万颗、树身只有一千多颗，如果各自随机生成球壳，
+ * 两片云的位置和密度都不一样，看起来就是「两拨粒子在飞」。
+ * 让文字粒子从树身粒子的散开目标里取点，出现和消散才和正常散开是同一片云。
+ *
+ * @param {Float32Array} shell 散开目标点（已经转换到同一坐标系）
+ * @param {number} n 取样数量
+ * @param {number} jitter 每个轴的抖动幅度
+ * @param {() => number} rng 可复现的随机源
+ */
+export function sampleShell(shell, n, jitter = 1.1, rng = Math.random) {
+  const out = new Float32Array(n * 3);
+  const m = Math.max(1, shell.length / 3);
+  for (let i = 0; i < n; i++) {
+    const k = ((rng() * m) | 0) * 3;
+    const i3 = i * 3;
+    out[i3] = shell[k] + (rng() - 0.5) * jitter;
+    out[i3 + 1] = shell[k + 1] + (rng() - 0.5) * jitter;
+    out[i3 + 2] = shell[k + 2] + (rng() - 0.5) * jitter;
+  }
+  return out;
+}
+
 /** 散开态下粒子离原点的平均距离，用于断言"确实是散开的" */
 export function meanRadius(positions) {
   let sum = 0;

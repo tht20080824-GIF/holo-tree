@@ -17,7 +17,19 @@ import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 
 import { CONFIG } from './config.js';
-import { buildTreeLayout } from './layout.js';
+import { buildTreeLayout, sampleShell } from './layout.js';
+import { heartPoints } from './heart.js';
+import { ZODIAC, zodiacIndexOf } from './zodiac.js';
+import { VORTEX, createRiseVortex, vortexPoint, vortexAlpha, vortexDone } from './vortex.js';
+import {
+  HEART_DISSOLVE,
+  createHeartDissolve,
+  dissolveOffset,
+  dissolveAlpha,
+  dissolveSize,
+  dissolveDarken,
+  smoothstep as dissolveSmooth,
+} from './heart-dissolve.js';
 import { createRibbon } from './ribbon.js';
 import { giftShape, bowShape, placeShape } from './ornament-shapes.js';
 import { placeOrnaments, makeScatterPoint } from './ornament-math.js';
@@ -262,6 +274,9 @@ export class HoloTree {
   _initTextPoints() {
     // 文字用高密度粒子：树身只有 1600 颗，铺字不够密
     const n = this.cfg.particles.count >= 1500 ? 14000 : 9000;
+    this.textKind = 'text';      // 'text' | 'heart'
+    this.heartState = null;
+    this._heartT = 0;
     this.textCount = n;
     this.textPhase = 'idle';
     this.textT = 0;
@@ -301,6 +316,165 @@ export class HoloTree {
     this.textPoints.visible = false;
     this.textPoints.frustumCulled = false;
     this.scene.add(this.textPoints);
+
+    this._initHeartDissolve();
+    this._initVortex();
+  }
+
+  /**
+   * 收尾漩涡：一段从画面下方转上来的粒子，作为「散开 → 聚拢」之间的过渡。
+   * 和主场景一样挂在 scene 下（不跟 treeRoot 转），用加色混合 + 径向贴图。
+   */
+  _initVortex() {
+    const n = this.cfg.vortex?.count ?? VORTEX.count;
+    this._vortexN = n;
+    this.vortexField = createRiseVortex(n, {
+      ...VORTEX,
+      ...this.cfg.vortex,
+      floorY: this.cfg.particles.floorY,
+    });
+    this._vortexPos = new Float32Array(n * 3);
+    this._vortexCol = new Float32Array(n * 3);
+    this._vortexT = 0;
+    this._vortexOn = false;
+
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.BufferAttribute(this._vortexPos, 3));
+    geo.setAttribute('color', new THREE.BufferAttribute(this._vortexCol, 3));
+    geo.boundingSphere = new THREE.Sphere(new THREE.Vector3(), 200);
+
+    const mat = new THREE.PointsMaterial({
+      size: 0.16,
+      map: radialTexture('rgba(255,246,220,1)', 'rgba(255,180,80,0.35)', 128),
+      transparent: true,
+      depthWrite: false,
+      blending: THREE.AdditiveBlending,
+      vertexColors: true,
+      toneMapped: false,
+      sizeAttenuation: true,
+    });
+
+    this.vortexPoints = new THREE.Points(geo, mat);
+    this.vortexPoints.visible = false;
+    this.vortexPoints.frustumCulled = false;
+    this.scene.add(this.vortexPoints);
+  }
+
+  /** 开始播放收尾漩涡 */
+  startVortex() {
+    this._vortexT = 0;
+    this._vortexOn = true;
+    this.vortexPoints.visible = true;
+  }
+
+  _updateVortex(dt) {
+    if (!this._vortexOn) return;
+    this._vortexT += dt;
+    const t = this._vortexT;
+    const f = this.vortexField;
+    const pos = this._vortexPos;
+    const col = this._vortexCol;
+    const out = this._vortexTmp || (this._vortexTmp = new Float32Array(3));
+
+    for (let i = 0; i < this._vortexN; i++) {
+      const i3 = i * 3;
+      const on = vortexPoint(f, i, t, out);
+      const a = on ? vortexAlpha(f, i, t) : 0;
+      if (!on) {
+        pos[i3] = 0;
+        pos[i3 + 1] = -999;
+        pos[i3 + 2] = 0;
+        col[i3] = col[i3 + 1] = col[i3 + 2] = 0;
+        continue;
+      }
+      pos[i3] = out[0];
+      pos[i3 + 1] = out[1];
+      pos[i3 + 2] = out[2];
+      const b = a * (0.85 + f.size[i] * 0.3);
+      col[i3] = 1.0 * b;
+      col[i3 + 1] = 0.78 * b;
+      col[i3 + 2] = 0.42 * b;
+    }
+
+    this.vortexPoints.geometry.attributes.position.needsUpdate = true;
+    this.vortexPoints.geometry.attributes.color.needsUpdate = true;
+
+    if (vortexDone(t, f.cfg)) {
+      this._vortexOn = false;
+      this.vortexPoints.visible = false;
+    }
+  }
+
+  /**
+   * 文字 / 爱心消散的专用渲染层：3 倍顶点（本体 + 2 个鬼影），
+   * 每颗粒子独立颜色 / 透明度 / 尺寸，所以能做出「丝带拉丝」和「化尘」。
+   *
+   * 为什么不用 PointsMaterial：它只支持全局 size 和 opacity，
+   * 做不到「边缘先暗、中心后暗」「远的更小」「余烬单独闪烁」。
+   */
+  _initHeartDissolve() {
+    const n = this.textCount;
+    const verts = n * 3;
+    this._heartVerts = verts;
+    this._heartPos = new Float32Array(verts * 3);
+    this._heartCol = new Float32Array(verts * 3);
+    this._heartAlpha = new Float32Array(verts);
+    this._heartSize = new Float32Array(verts);
+    this._off = [new Float32Array(3), new Float32Array(3), new Float32Array(3)];
+    this._offGhost = [new Float32Array(3), new Float32Array(3)];
+
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.BufferAttribute(this._heartPos, 3));
+    geo.setAttribute('aColor', new THREE.BufferAttribute(this._heartCol, 3));
+    geo.setAttribute('aAlpha', new THREE.BufferAttribute(this._heartAlpha, 1));
+    geo.setAttribute('aSize', new THREE.BufferAttribute(this._heartSize, 1));
+    geo.boundingSphere = new THREE.Sphere(new THREE.Vector3(), 400);
+
+    const mat = new THREE.ShaderMaterial({
+      uniforms: {
+        uMap: { value: radialTexture('rgba(255,246,220,1)', 'rgba(255,150,70,0.38)', 128) },
+        uScale: { value: 600 },
+        uPixelRatio: { value: this.renderer.getPixelRatio() },
+      },
+      vertexShader: `
+        attribute vec3 aColor;
+        attribute float aAlpha;
+        attribute float aSize;
+        uniform float uScale;
+        uniform float uPixelRatio;
+        varying vec3 vColor;
+        varying float vAlpha;
+        void main() {
+          vColor = aColor;
+          vAlpha = aAlpha;
+          vec4 mv = modelViewMatrix * vec4(position, 1.0);
+          gl_PointSize = max(1.0, aSize * uPixelRatio * (uScale / -mv.z));
+          gl_Position = projectionMatrix * mv;
+        }
+      `,
+      fragmentShader: `
+        uniform sampler2D uMap;
+        varying vec3 vColor;
+        varying float vAlpha;
+        void main() {
+          vec4 tex = texture2D(uMap, gl_PointCoord);
+          gl_FragColor = vec4(vColor, tex.a * vAlpha);
+        }
+      `,
+      transparent: true,
+      depthWrite: false,
+      blending: THREE.AdditiveBlending,
+      toneMapped: false,
+    });
+
+    const size = this.renderer.getSize(new THREE.Vector2());
+    mat.uniforms.uScale.value = size.y * 0.5;
+
+    this.heartMaterial = mat;
+    this.heartPoints = new THREE.Points(geo, mat);
+    this.heartPoints.visible = false;
+    this.heartPoints.frustumCulled = false;
+    this.scene.add(this.heartPoints);
   }
 
   /** 环绕光带：挂在 treeRoot 下，这样手势转向时会跟着一起转 */
@@ -318,6 +492,10 @@ export class HoloTree {
 
     this._ribbonOpacity = 1; // 散开态时淡出
     this._camBlend = null;   // 开场交棒时的机位过渡
+
+    // 接回流程锁：散开 → 聚合 这段不接受任何用户输入
+    this.restoring = false;
+    this._restoreDoneAt = 0;
   }
 
   /**
@@ -937,7 +1115,119 @@ export class HoloTree {
         }
       }
     }
+    this.textKind = 'text';
+    const ok = this._morphToPoints(pts, minX, minY, maxX, maxY);
+    if (ok) this._prepareDissolve();   // 文字和爱心共用同一套消散数据
+    return ok;
+  }
+
+  /**
+   * 爱心：手势「1」单独保持一段时间触发。
+   * 和文字走同一条变形管线，只是把字形采样换成心形采样，
+   * 所以「树散开 → 粒子飞入爱心 → 再飞散回树」的手感和文字完全一致。
+   */
+  showHeart() {
+    const h = heartPoints(2600);
+    const ok = this._morphToPoints(h.pts, h.minX, h.minY, h.maxX, h.maxY);
+    if (!ok) return false;
+    this.textKind = 'heart';
+    this._prepareDissolve();
+    return true;
+  }
+
+  /** 把平面坐标、分组、速度种子等都算好（文字 / 爱心通用），消散时直接用 */
+  _prepareDissolve() {
+    const n = this.textCount;
+    const b = this._morphBasis;
+    if (!b) return;
+    const u = new Float32Array(n);
+    const v = new Float32Array(n);
+    const tmp = new THREE.Vector3();
+    let maxR = 0;
+    for (let i = 0; i < n; i++) {
+      const i3 = i * 3;
+      tmp.set(
+        this.textGoal[i3] - b.centre.x,
+        this.textGoal[i3 + 1] - b.centre.y,
+        this.textGoal[i3 + 2] - b.centre.z,
+      );
+      const ux = tmp.dot(b.right);
+      const uy = tmp.dot(b.up);
+      u[i] = ux;
+      v[i] = uy;
+      const r = Math.hypot(ux, uy);
+      if (r > maxR) maxR = r;
+    }
+    this._heartMaxR = maxR || 1;
+    this._heartCfg = null;
+    this.heartState = createHeartDissolve(n, u, v, this._heartMaxR, Math.random);
+  }
+
+  /**
+   * 生肖：手势「2」停住触发。只认十二生肖（`zodiac.js`），
+   * 形状用 emoji 字形取 alpha 采样，取不到再退回汉字字形。
+   */
+  showZodiac(rawText) {
+    const idx = zodiacIndexOf(rawText);
+    if (idx < 0) return false;
+    const sampled = this._sampleGlyph(ZODIAC[idx].emoji, ZODIAC[idx].name);
+    if (!sampled) return false;
+    this.textKind = 'zodiac';
+    const ok = this._morphToPoints(sampled.pts, sampled.minX, sampled.minY, sampled.maxX, sampled.maxY);
+    if (ok) this._prepareDissolve();
+    return ok;
+  }
+
+  /** 把 emoji / 汉字画到 canvas 上取 alpha 采样 */
+  _sampleGlyph(emoji, fallbackChar) {
+    const S = 512;
+    const c = document.createElement('canvas');
+    c.width = c.height = S;
+    const ctx = c.getContext('2d');
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillStyle = '#fff';
+
+    const sample = () => {
+      const img = ctx.getImageData(0, 0, S, S).data;
+      const pts = [];
+      let minX = S;
+      let minY = S;
+      let maxX = 0;
+      let maxY = 0;
+      for (let y = 0; y < S; y += 2) {
+        for (let x = 0; x < S; x += 2) {
+          if (img[(y * S + x) * 4 + 3] > 120) {
+            pts.push(x, y);
+            if (x < minX) minX = x;
+            if (x > maxX) maxX = x;
+            if (y < minY) minY = y;
+            if (y > maxY) maxY = y;
+          }
+        }
+      }
+      return pts.length >= 40 ? { pts, minX, minY, maxX, maxY } : null;
+    };
+
+    // 先试 emoji（彩色字也能取 alpha，取到的是轮廓剪影）
+    ctx.font = `380px "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", "Android Emoji", sans-serif`;
+    ctx.fillText(emoji, S / 2, S / 2);
+    let out = sample();
+    if (out) return out;
+
+    // 有些系统没有 emoji 字体：退回汉字
+    ctx.clearRect(0, 0, S, S);
+    ctx.font = `400px "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif`;
+    ctx.fillText(fallbackChar, S / 2, S / 2);
+    out = sample();
+    return out;
+  }
+
+  /** 把一组采样点铺到镜头前的平面上（文字 / 爱心共用） */
+  _morphToPoints(pts, minX, minY, maxX, maxY) {
     if (pts.length < 20) return false;
+    if (this.textPhase === 'dissolve') this._finishDissolve();
+    this._regatherAt = 0;   // 新的变形打断「收拢」计划
 
     const inkW = Math.max(1, maxX - minX);
     const inkH = Math.max(1, maxY - minY);
@@ -960,26 +1250,30 @@ export class HoloTree {
     const centre = this.camera.position.clone().addScaledVector(fwd, dist);
     centre.y -= visH * 0.02;
 
-    // 散开球壳：和正常散开同一片区域
-    const { floorY, height, radius } = this.cfg.particles;
-    const cloud = new THREE.Vector3(0, floorY + height * 0.5, 0);
-    this.treeRoot.localToWorld(cloud);
+    // 散开球壳：直接复用树身粒子的散开目标点。
+    // 之前这里另起一坨随机球壳，文字和树身是「两片云」；
+    // 复用之后两边落在同一批点上，出现/消散看起来就是同一次散开。
+    const treeN = Math.max(1, this.cfg.particles.count);
+    this.treeRoot.updateMatrixWorld();
+    const shellWorld = new Float32Array(treeN * 3);
+    const tmpWorld = new THREE.Vector3();
+    for (let i = 0; i < treeN; i++) {
+      const i3 = i * 3;
+      tmpWorld.set(this.scatterTarget[i3], this.scatterTarget[i3 + 1], this.scatterTarget[i3 + 2]);
+      this.treeRoot.localToWorld(tmpWorld);
+      shellWorld[i3] = tmpWorld.x;
+      shellWorld[i3 + 1] = tmpWorld.y;
+      shellWorld[i3 + 2] = tmpWorld.z;
+    }
 
     const n = this.textCount;
     const goal = this.textGoal;
-    const from = this.textFrom;
-    const to = this.textTo;
     const nPts = pts.length / 2;
     const tmp = new THREE.Vector3();
 
-    const cloudPoint = (out, i3) => {
-      const a = Math.random() * Math.PI * 2;
-      const b = Math.acos(2 * Math.random() - 1);
-      const r = radius * (1.6 + Math.random() * 1.6);
-      out[i3] = cloud.x + Math.sin(b) * Math.cos(a) * r;
-      out[i3 + 1] = cloud.y + Math.cos(b) * r * 0.7;
-      out[i3 + 2] = cloud.z + Math.sin(b) * Math.sin(a) * r;
-    };
+    // 出现/消散的起点和终点都从树身粒子的散开目标里取 —— 两边同一片云
+    const shellFrom = sampleShell(shellWorld, n);
+    const shellTo = sampleShell(shellWorld, n);
 
     for (let i = 0; i < n; i++) {
       const i3 = i * 3;
@@ -992,15 +1286,22 @@ export class HoloTree {
       goal[i3] = tmp.x;
       goal[i3 + 1] = tmp.y;
       goal[i3 + 2] = tmp.z;
-      cloudPoint(from, i3);
-      cloudPoint(to, i3);
-      this.textPos[i3] = from[i3];
-      this.textPos[i3 + 1] = from[i3 + 1];
-      this.textPos[i3 + 2] = from[i3 + 2];
     }
+    this.textFrom.set(shellFrom);
+    this.textTo.set(shellTo);
+    this.textPos.set(shellFrom);
     this.textGeometry.attributes.position.needsUpdate = true;
     this.textPoints.visible = true;
-    this.textPoints.material.opacity = 1;
+    this.textPoints.material.opacity = 0;   // 从 0 淡入，避免「啪」一下出现
+
+    this._morphBasis = {
+      centre: centre.clone(),
+      right: right.clone(),
+      up: up.clone(),
+      fwd: fwd.clone(),
+      visW,
+      visH,
+    };
 
     this.textPhase = 'in';
     this.textT = 0;
@@ -1030,6 +1331,7 @@ export class HoloTree {
         arr[i3 + 2] = this.textFrom[i3 + 2] + (this.textGoal[i3 + 2] - this.textFrom[i3 + 2]) * e;
       }
       this.textGeometry.attributes.position.needsUpdate = true;
+      this.textPoints.material.opacity = Math.min(1, this.textT / 0.18);
       if (p >= 1) this.textPhase = 'hold';
       return;
     }
@@ -1044,13 +1346,14 @@ export class HoloTree {
         arr[i3 + 2] = this.textGoal[i3 + 2] + (this.textTo[i3 + 2] - this.textGoal[i3 + 2]) * e;
       }
       this.textGeometry.attributes.position.needsUpdate = true;
-      this.textPoints.material.opacity = 1 - p * p;
+      // 前半程保持全亮（就是散开的样子），最后 55% 才淡出，
+      // 免得字还没飞出去就先「化」没了
+      const fade = Math.max(0, (p - 0.45) / 0.55);
+      this.textPoints.material.opacity = 1 - fade * fade * (3 - 2 * fade);
       if (p >= 1) {
         this.textPhase = 'idle';
         this.textPoints.visible = false;
-        this.decor.visible = true;
-        if (this.ornamentMesh) this.ornamentMesh.visible = true;
-        if (this.star) this.star.visible = true;
+        this._revealScatterThenRegather();
       }
     }
   }
@@ -1059,10 +1362,205 @@ export class HoloTree {
   hideText() {
     if (!this.textActive) return;
     this.textActive = false;
-    this.mode = MODE.TREE;
-    this._treeOpacityTarget = 1;
+    this.restoring = true;      // 从收到终止指令这一刻起，用户输入全部让路
+
+    // 文字和爱心都走 3.2 秒的「丝带分流」消散。
+    // 这段时间里树先停在散开态但保持透明 —— 消散完先露出散开的树，再收拢。
+    if (this.heartState) {
+      this.mode = MODE.SCATTER;
+      this._treeOpacityTarget = 0;
+      this._startDissolve();
+      return;
+    }
+
+    this.mode = MODE.SCATTER;       // 文字消散期间树先停在散开态但透明
+    this._treeOpacityTarget = 0;
     this.textPhase = 'out';
     this.textT = 0;
+  }
+
+  /** 开始消散：把当前字形位置原样搬进消散系统，做到无缝衔接 */
+  _startDissolve() {
+    const n = this.textCount;
+    const pos = this._heartPos;
+    const col = this._heartCol;
+    const alpha = this._heartAlpha;
+    const size = this._heartSize;
+
+    for (let i = 0; i < n; i++) {
+      const i3 = i * 3;
+      for (let g = 0; g < 3; g++) {
+        const v = i * 3 + g;
+        const v3 = v * 3;
+        pos[v3] = this.textPos[i3];
+        pos[v3 + 1] = this.textPos[i3 + 1];
+        pos[v3 + 2] = this.textPos[i3 + 2];
+        col[v3] = 1;
+        col[v3 + 1] = 0.72;
+        col[v3 + 2] = 0.38;
+        alpha[v] = 1;
+        size[v] = 0.045;
+      }
+    }
+    this._heartT = 0;
+    this.textPhase = 'dissolve';
+    this.textPoints.visible = false;
+    this.heartPoints.visible = true;
+    this._heartGeoDirty = true;
+  }
+
+  /**
+   * 四拍消散（文字 / 爱心共用）：内收 → 起丝 → 分流 → 化尘。
+   * 每帧算三份位置：本体 + 两个「鬼影」（-0.06s / -0.12s），
+   * 鬼影靠加色混合叠成拉丝，不用后处理。
+   */
+  _updateDissolve(dt) {
+    const st = this.heartState;
+    const b = this._morphBasis;
+    if (!st || !b) return;
+
+    this._heartT += dt;
+    const t = this._heartT;
+
+    const n = this.textCount;
+    const pos = this._heartPos;
+    const col = this._heartCol;
+    const alpha = this._heartAlpha;
+    const sizeArr = this._heartSize;
+
+    // 位移距离按爱心自身半径算：太小轮廓散不掉，太大直接飞出画面
+    const spread = (this._heartMaxR || 4) * 2.6;
+    const cfg = this._heartCfg || (this._heartCfg = { ...HEART_DISSOLVE, maxSpread: spread });
+
+    const contract = 1 - HEART_DISSOLVE.contract * dissolveSmooth(t / 0.35);
+    const sizeMul = dissolveSize(t);
+    const darken = dissolveDarken(t);
+
+    // 暖橙 → 暗褐
+    const warm = [1.0, 0.72, 0.38];
+    const brown = [0.30, 0.16, 0.09];
+
+    // 移动端粒子数减半；组数和错峰时间不动，否则丝带会断成碎点
+    const stride = this.cfg.particles.count >= 1500 ? 1 : 2;
+
+    const off = this._off[0];
+    const ghost1 = this._off[1];
+    const ghost2 = this._off[2];
+    const c = b.centre;
+    const rx = b.right.x;
+    const ry = b.right.y;
+    const rz = b.right.z;
+    const ux = b.up.x;
+    const uy = b.up.y;
+    const uz = b.up.z;
+    const fx = b.fwd?.x ?? 0;
+    const fy = b.fwd?.y ?? 0;
+    const fz = b.fwd?.z ?? 0;
+
+    for (let i = 0; i < n; i++) {
+      if (stride > 1 && i % stride === 1) {
+        // 被减掉的那一半：尺寸归零，不参与绘制
+        for (let g = 0; g < 3; g++) sizeArr[i * 3 + g] = 0;
+        continue;
+      }
+
+      const a = dissolveAlpha(st.edge[i], t);
+      const ember = st.ember[i] === 1;
+
+      let r = warm[0] + (brown[0] - warm[0]) * darken;
+      let g = warm[1] + (brown[1] - warm[1]) * darken;
+      let bl = warm[2] + (brown[2] - warm[2]) * darken;
+
+      let aMain = a;
+      if (ember && t > 1.6) {
+        // 余烬：不掉到全黑，带一点不规则闪烁
+        const flick = 0.72 + 0.28 * Math.sin(t * 9.3 + st.phase[i] * 3.1);
+        aMain = Math.max(a, 0.32 * flick);
+        r = Math.min(1, r + 0.5 * flick);
+        g = Math.min(1, g + 0.28 * flick);
+        bl = Math.min(1, bl + 0.08 * flick);
+      }
+
+      // 本体
+      dissolveOffset(st, i, t, off, cfg);
+      const px = st.u[i] * contract + off[0];
+      const py = st.v[i] * contract + off[1];
+      let v3 = i * 9;
+      pos[v3] = c.x + rx * px + ux * py + fx * off[2];
+      pos[v3 + 1] = c.y + ry * px + uy * py + fy * off[2];
+      pos[v3 + 2] = c.z + rz * px + uz * py + fz * off[2];
+      col[v3] = r; col[v3 + 1] = g; col[v3 + 2] = bl;
+      alpha[i * 3] = aMain;
+      sizeArr[i * 3] = 0.045 * sizeMul;
+
+      // 鬼影 1 / 2：同一轨道上早 0.06s / 0.12s 的位置
+      for (let gI = 0; gI < 2; gI++) {
+        const back = gI === 0 ? 0.06 : 0.12;
+        const tBack = t - back;
+        const v = i * 3 + gI + 1;
+        const vv = v * 3;
+        if (tBack <= HEART_DISSOLVE.startAt + st.delay[i]) {
+          pos[vv] = pos[v3];
+          pos[vv + 1] = pos[v3 + 1];
+          pos[vv + 2] = pos[v3 + 2];
+          col[vv] = r; col[vv + 1] = g; col[vv + 2] = bl;
+          alpha[v] = 0;
+          sizeArr[v] = 0;
+          continue;
+        }
+        const gg = gI === 0 ? ghost1 : ghost2;
+        dissolveOffset(st, i, tBack, gg, cfg);
+        const gx = st.u[i] * contract + gg[0];
+        const gy = st.v[i] * contract + gg[1];
+        pos[vv] = c.x + rx * gx + ux * gy + fx * gg[2];
+        pos[vv + 1] = c.y + ry * gx + uy * gy + fy * gg[2];
+        pos[vv + 2] = c.z + rz * gx + uz * gy + fz * gg[2];
+        col[vv] = r; col[vv + 1] = g; col[vv + 2] = bl;
+        alpha[v] = aMain * (gI === 0 ? 0.55 : 0.28);
+        sizeArr[v] = 0.045 * sizeMul;
+      }
+    }
+
+    this.heartPoints.geometry.attributes.position.needsUpdate = true;
+    this.heartPoints.geometry.attributes.aColor.needsUpdate = true;
+    this.heartPoints.geometry.attributes.aAlpha.needsUpdate = true;
+    this.heartPoints.geometry.attributes.aSize.needsUpdate = true;
+
+    if (t >= HEART_DISSOLVE.total) this._finishDissolve();
+  }
+
+  _finishDissolve() {
+    this.textPhase = 'idle';
+    this.heartPoints.visible = false;
+    this.textPoints.visible = false;
+    this._revealScatterThenRegather();
+  }
+
+  /**
+   * 文字 / 爱心消散完的统一收尾：
+   * 先让「散开态」的树淡入（粒子本来就停在散开云里），停 1.5 秒，
+   * 再切回合拢态收成树。装饰和星星等收拢时再回来。
+   */
+  _revealScatterThenRegather() {
+    this.mode = MODE.SCATTER;
+    this._treeOpacityTarget = 1;
+    // 这一刻粒子其实还停在散开云里、而且是透明的。
+    // 先把它们瞬间放回「树的合拢位置」（看不见的时候做，不会穿帮），
+    // 再切到散开态 —— 这样看到的就是一次完整的「树炸开 → 再收回」，和平时张开手掌一样。
+    this.pos.set(this.treeTarget);
+    this._regatherAt = this.time + 1.5;
+    this.startVortex();   // 散开态露脸的同时，漩涡从下方转上来，收拢时正好接住
+  }
+
+  /** 消散之后：散开态 → 收拢成树 */
+  _regatherTree(rig) {
+    this._regatherAt = 0;
+    this.mode = MODE.TREE;
+    this._restoreDoneAt = this.time + 1.2;   // 收拢大约 0.8s，留一点余量再解锁
+    rig?.setMode?.(MODE.TREE);
+    this.decor.visible = true;
+    if (this.ornamentMesh) this.ornamentMesh.visible = true;
+    if (this.star) this.star.visible = true;
   }
 
   /** 从开场机位平滑过渡到交互机位（from: {z,y,targetY,fov}） */
@@ -1108,6 +1606,12 @@ export class HoloTree {
     this.time += dt;
     const t = this.time;
 
+    if (this._regatherAt && this.time >= this._regatherAt) this._regatherTree(rig);
+    if (this._restoreDoneAt && this.time >= this._restoreDoneAt) {
+      this._restoreDoneAt = 0;
+      this.restoring = false;   // 树已恢复，交还控制权
+    }
+
     // 相机：绕树转由 treeRoot 承担，所以相机只沿 z 推拉，保持构图稳定
     // 文字形态期间冻结机位，保证文字一直正对屏幕
     if (!this.textActive) {
@@ -1150,7 +1654,9 @@ export class HoloTree {
       pmat.opacity = op;
       pmat.depthWrite = op > 0.995;
     }
-    this._updateTextPoints(dt);
+    this._updateVortex(dt);
+    if (this.textPhase === 'dissolve') this._updateDissolve(dt);
+    else this._updateTextPoints(dt);
 
     // 装饰球/照片：轻微上下浮动 + 缓慢自转
     this.decor.rotation.y += dt * 0.12;
@@ -1254,6 +1760,10 @@ export class HoloTree {
     this.camera.updateProjectionMatrix();
     this.renderer.setSize(w, h);
     this.composer.setSize(w, h);
+    if (this.heartMaterial) {
+      this.heartMaterial.uniforms.uScale.value = h * 0.5;
+      this.heartMaterial.uniforms.uPixelRatio.value = this.renderer.getPixelRatio();
+    }
   }
 
   dispose() {

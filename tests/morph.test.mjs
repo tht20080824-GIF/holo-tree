@@ -59,3 +59,89 @@ test('手指抖动（1 和 0 交替）不会误触', () => {
   const r = play(seq, [1, 0, 1, 0, 1, 0]);
   assert.equal(r.fired, 0);
 });
+
+// ---------------------------------------------------------------- 爱心 vs 文字 仲裁
+
+import { GestureRouter } from '../js/gesture.js';
+
+/** 按「保持某根手指 ms 毫秒」喂帧，收集触发的动作 */
+function feed(router, plan, stepMs = 30, start = 0) {
+  const actions = [];
+  let t = start;
+  for (const { count, ms } of plan) {
+    for (let e = 0; e < ms; e += stepMs) {
+      const a = router.update(count, t);
+      if (a !== 'none') actions.push(a);
+      t += stepMs;
+    }
+  }
+  return { actions, t };
+}
+
+test('仲裁：只比「1」并停住 → 爱心', () => {
+  const r = new GestureRouter([1, 2, 3, 5]);
+  const { actions } = feed(r, [{ count: 1, ms: 1200 }]);
+  assert.deepEqual(actions, ['heart']);
+});
+
+test('仲裁：1→2→3→5 走序列 → 文字，不会先冒出一个爱心', () => {
+  const r = new GestureRouter([1, 2, 3, 5]);
+  const { actions } = feed(r, [
+    { count: 1, ms: 240 },
+    { count: 2, ms: 240 },
+    { count: 3, ms: 240 },
+    { count: 5, ms: 300 },
+  ]);
+  assert.deepEqual(actions, ['text']);
+});
+
+test('仲裁：1 停 0.4 秒（还不够久）再接着比 2、3、5 → 仍然是文字', () => {
+  const r = new GestureRouter([1, 2, 3, 5]);
+  const { actions } = feed(r, [
+    { count: 1, ms: 400 },
+    { count: 2, ms: 240 },
+    { count: 3, ms: 240 },
+    { count: 5, ms: 300 },
+  ]);
+  assert.deepEqual(actions, ['text']);
+});
+
+test('仲裁：比出爱心后，序列被作废，接着比 2、3、5 不会又变文字', () => {
+  const r = new GestureRouter([1, 2, 3, 5]);
+  const first = feed(r, [{ count: 1, ms: 1000 }]);
+  assert.deepEqual(first.actions, ['heart']);
+
+  const second = feed(r, [
+    { count: 2, ms: 240 },
+    { count: 3, ms: 240 },
+    { count: 5, ms: 300 },
+  ], 30, first.t + 2000);
+  assert.deepEqual(second.actions, []);
+});
+
+test('仲裁：比出爱心后继续比 1，冷却期内不重复触发', () => {
+  const r = new GestureRouter([1, 2, 3, 5]);
+  const { actions, t } = feed(r, [{ count: 1, ms: 2600 }]);
+  assert.equal(actions[0], 'heart');
+  assert.equal(actions.length, 1, `冷却期内不该连触发，实际 ${actions.join(',')}`);
+
+  // 手指放下来、过一会儿再比 1，应该能再触发一次
+  const again = feed(r, [{ count: 0, ms: 300 }, { count: 1, ms: 1400 }], 30, t + 200);
+  assert.deepEqual(again.actions, ['heart']);
+});
+
+test('仲裁：只有 3/5 时什么都不触发（2 已经归给生肖了）', () => {
+  for (const count of [3, 5]) {
+    const r = new GestureRouter([1, 2, 3, 5]);
+    const { actions } = feed(r, [{ count, ms: 1200 }]);
+    assert.deepEqual(actions, [], `比 ${count} 根手指不该触发`);
+  }
+});
+
+test('仲裁：没有手（-1）会清掉「1」的计时，手回来看见 1 才重新计', () => {
+  const r = new GestureRouter([1, 2, 3, 5]);
+  const a = feed(r, [{ count: 1, ms: 500 }]);
+  assert.deepEqual(a.actions, []);
+  const b = feed(r, [{ count: -1, ms: 100 }, { count: 1, ms: 400 }], 30, a.t);
+  assert.deepEqual(b.actions, [], '手消失前的 500ms 不能累加');
+});

@@ -269,3 +269,90 @@ test('Rig：手出现不会打断已锁定的方向', () => {
   for (let i = 0; i < 20; i++) rig.update(1 / 60, right);
   assert.equal(rig.spinDir, 1);
 });
+
+test('Rig：手越靠边转得越快（比例转向，不是固定转速）', () => {
+  const dt = 1 / 60;
+  const edge = new Rig(CONFIG.rig);
+  const mid = new Rig(CONFIG.rig);
+
+  // px 越小 → x 越大 → 越靠右；0.05 是几乎贴边，0.35 只是刚过门限
+  const far = measureHand(makeHand({ px: 0.05 }));
+  const near = measureHand(makeHand({ px: 0.35 }));
+
+  for (let i = 0; i < 120; i++) edge.update(dt, far);
+  for (let i = 0; i < 120; i++) mid.update(dt, near);
+
+  assert.equal(edge.spinDir, 1);
+  assert.equal(mid.spinDir, 1);
+  assert.ok(edge.yawTarget > mid.yawTarget * 1.2,
+    `贴边转 ${edge.yawTarget.toFixed(2)} 应明显快于刚过门限 ${mid.yawTarget.toFixed(2)}`);
+});
+
+test('Rig：甩手冲量立即生效并锁定方向', () => {
+  const rig = new Rig(CONFIG.rig);
+  const before = rig.yawTarget;
+  rig.flickYaw(1, 1);
+  assert.ok(rig.yawTarget - before >= CONFIG.rig.flickYaw * 0.99, '冲量应立刻加到目标角上');
+  assert.equal(rig.spinDir, 1, '甩完顺势保持这个方向');
+
+  rig.flickYaw(-1, 1);
+  assert.equal(rig.spinDir, -1, '反向甩应立刻反向');
+});
+
+test('Rig：竖划冲量让俯仰变化，随后自然衰减', () => {
+  const rig = new Rig(CONFIG.rig);
+  const hand = measureHand(makeHand({ px: 0.5, py: 0.5 })); // 手在正中
+
+  rig.flickPitch(1, 1);
+  rig.update(1 / 60, hand);
+  const peak = rig.pitchTarget;
+  assert.ok(peak > 0.05, `竖划后应有抬头的冲量，实际 ${peak.toFixed(3)}`);
+
+  for (let i = 0; i < 120; i++) rig.update(1 / 60, hand); // 2 秒
+  assert.ok(Math.abs(rig.pitchTarget) < 0.02, `冲量应衰减掉，实际 ${rig.pitchTarget.toFixed(3)}`);
+});
+
+test('Rig：推向镜头的冲量让距离变小（靠近）', () => {
+  const rig = new Rig(CONFIG.rig);
+  const hand = measureHand(makeHand({ s: 0.12 }));
+  rig.update(1 / 60, hand);
+  const base = rig.distanceTarget;
+
+  rig.flickZoom(-1);
+  rig.update(1 / 60, hand);
+  assert.ok(rig.distanceTarget < base, `推近后距离应更小：${rig.distanceTarget.toFixed(3)} vs ${base.toFixed(3)}`);
+});
+
+test('Rig：接回流程锁定期间，手和指针都不生效', () => {
+  const rig = new Rig(CONFIG.rig);
+  const hand = measureHand(makeHand({ px: 0.1 }));
+
+  for (let i = 0; i < 30; i++) rig.update(1 / 60, hand);
+  const yawBefore = rig.yawTarget;
+  const pitchBefore = rig.pitchTarget;
+  const distBefore = rig.distanceTarget;
+
+  rig.locked = true;
+  rig.nudgeYaw(400);
+  rig.nudgePitch(300);
+  rig.nudgeZoom(900);
+  rig.flickYaw(1, 1);
+  rig.flickZoom(-1);
+  for (let i = 0; i < 60; i++) rig.update(1 / 60, hand);
+
+  assert.equal(rig.yawTarget, yawBefore, '锁定时目标角不能变');
+  assert.equal(rig.pitchTarget, pitchBefore, '锁定时俯仰不能变');
+  assert.equal(rig.distanceTarget, distBefore, '锁定时距离不能变');
+});
+
+test('Rig：解锁后恢复响应', () => {
+  const rig = new Rig(CONFIG.rig);
+  rig.locked = true;
+  const hand = measureHand(makeHand({ px: 0.1 }));
+  for (let i = 0; i < 30; i++) rig.update(1 / 60, hand);
+  const before = rig.yawTarget;
+
+  rig.locked = false;
+  for (let i = 0; i < 60; i++) rig.update(1 / 60, hand);
+  assert.ok(rig.yawTarget !== before, '解锁后应重新响应手势');
+});

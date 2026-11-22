@@ -46,6 +46,130 @@ export const GESTURE = Object.freeze({
 
 export const MODE = Object.freeze({ TREE: 'TREE', SCATTER: 'SCATTER', TEXT: 'TEXT' });
 
+/**
+ * 主动意图：把「手在动」翻译成明确的动作，而不是只吃左右位置。
+ *
+ * 之前只有「手停在左边/右边 → 一直转」，手划一下跟手停住没区别，
+ * 用户会觉得"我明明甩了一下，它却没反应"。这里额外识别两类动作：
+ *   - 划动：短时间内的直线位移（横划转身、竖划抬头）
+ *   - 推拉：手掌尺度的快速变化（推向镜头 = 靠近，拉远 = 后退）
+ */
+export const INTENT = Object.freeze({
+  NONE: 'NONE',
+  SWIPE_LEFT: 'SWIPE_LEFT',
+  SWIPE_RIGHT: 'SWIPE_RIGHT',
+  SWIPE_UP: 'SWIPE_UP',
+  SWIPE_DOWN: 'SWIPE_DOWN',
+  PUSH: 'PUSH',   // 手推向镜头（画面里手变大）→ 应该靠近
+  PULL: 'PULL',   // 手拉远（画面里手变小）→ 应该后退
+});
+
+/**
+ * 意图识别器：纯计算，能吃单测。
+ *
+ * 判据刻意写得"严格一点"：位移够长、速度够快、路径够直，三者同时满足才算划动。
+ * 只满足一个的话，手在画面里随便晃两下就会误触发，比不灵敏更难受。
+ */
+export class GestureIntent {
+  constructor(cfg = {}) {
+    this.cfg = {
+      windowMs: 280,
+      minSpanMs: 110,
+      swipeDist: 0.2,
+      swipeSpeed: 0.85,
+      straightness: 0.72,
+      swipeCooldownMs: 300,
+      pushScale: 0.26,
+      pushCooldownMs: 550,
+      ...cfg,
+    };
+    this._buf = [];
+    this._lastAt = new Map();
+  }
+
+  reset() {
+    this._buf.length = 0;
+  }
+
+  _cooldownMs(intent) {
+    return intent === INTENT.PUSH || intent === INTENT.PULL
+      ? this.cfg.pushCooldownMs
+      : this.cfg.swipeCooldownMs;
+  }
+
+  _ready(intent, now) {
+    const last = this._lastAt.has(intent) ? this._lastAt.get(intent) : -Infinity;
+    return now - last >= this._cooldownMs(intent);
+  }
+
+  /** 触发后清空轨迹：同一段挥动不能连续触发两次 */
+  _fire(intent, now, strength) {
+    this._lastAt.set(intent, now);
+    this._buf.length = 0;
+    return { intent, strength, at: now };
+  }
+
+  /**
+   * @param {object|null} hand measureHand() 的结果
+   * @param {number} now 毫秒
+   * @returns {{intent:string, strength:number}}
+   */
+  update(hand, now) {
+    const none = { intent: INTENT.NONE, strength: 0 };
+    if (!hand) {
+      this.reset();
+      return none;
+    }
+
+    const c = this.cfg;
+    const b = this._buf;
+    b.push({ t: now, x: hand.x, y: hand.y, s: hand.scale });
+    while (b.length > 1 && now - b[0].t > c.windowMs) b.shift();
+
+    const first = b[0];
+    const last = b[b.length - 1];
+    const spanMs = last.t - first.t;
+    if (spanMs < c.minSpanMs) return none;
+    const span = spanMs / 1000;
+
+    // 实际路径长度：位移/路径 = 直线度，画圈时这个值会很低
+    let path = 0;
+    for (let i = 1; i < b.length; i++) {
+      path += Math.hypot(b[i].x - b[i - 1].x, b[i].y - b[i - 1].y);
+    }
+
+    const dx = last.x - first.x;
+    const dy = last.y - first.y;
+    const dist = Math.hypot(dx, dy);
+    const speed = dist / span;
+    const straight = path > 1e-6 ? dist / path : 0;
+
+    // 1) 划动优先（比推拉更"有意图"）
+    if (dist >= c.swipeDist && speed >= c.swipeSpeed && straight >= c.straightness) {
+      const horizontal = Math.abs(dx) >= Math.abs(dy);
+      let intent;
+      if (horizontal) intent = dx > 0 ? INTENT.SWIPE_RIGHT : INTENT.SWIPE_LEFT;
+      else intent = dy > 0 ? INTENT.SWIPE_DOWN : INTENT.SWIPE_UP;
+
+      if (this._ready(intent, now)) {
+        return this._fire(intent, now, Math.min(1, dist / (c.swipeDist * 2)));
+      }
+      return none;
+    }
+
+    // 2) 推拉：手掌尺度的相对变化
+    const ds = (last.s - first.s) / Math.max(first.s, 1e-4);
+    if (Math.abs(ds) >= c.pushScale) {
+      const intent = ds > 0 ? INTENT.PUSH : INTENT.PULL;
+      if (this._ready(intent, now)) {
+        return this._fire(intent, now, Math.min(1, Math.abs(ds) / (c.pushScale * 2)));
+      }
+    }
+
+    return none;
+  }
+}
+
 function dist2d(a, b) {
   return Math.hypot(a.x - b.x, a.y - b.y);
 }
@@ -202,6 +326,15 @@ export class MorphSequence {
     this.cooldownUntil = 0;
   }
 
+  /** 作废当前进度（比如这一下「1」被判成爱心了，不能再算序列第一步） */
+  reset() {
+    this.step = 0;
+    this.cand = -1;
+    this.stable = -1;
+    this.candAt = 0;
+    this.stepAt = 0;
+  }
+
   /** @returns {boolean} true = 序列完成，应该触发动作 */
   update(count, now) {
     if (count == null || count < 0) return false;
@@ -234,5 +367,90 @@ export class MorphSequence {
       this.stepAt = now;
     }
     return false;
+  }
+}
+
+
+/**
+ * 「1 → 爱心」和「1→2→3→5 → 文字」的仲裁。
+ *
+ * 矛盾点：单独一个「1」既是爱心的手势，也是文字序列的第一步。光看一帧分不出来，
+ * 所以用「时间」来分辨用户的意图：
+ *   - 手指 1 立起来之后**很快**变成 2 → 他在走序列，继续等后面的 3、5；
+ *   - 手指 1 **停住不动**超过 heartHoldMs → 他就是想变爱心，直接抢过来。
+ *
+ * 抢过来之后会把序列作废，避免同一个「1」又被记成序列第一步。
+ */
+export class GestureRouter {
+  constructor(seq = [1, 2, 3, 5], {
+    heartHoldMs = 800,
+    heartCooldownMs = 1600,
+    zodiacHoldMs = 800,
+    zodiacCooldownMs = 1800,
+    ...seqOpts
+  } = {}) {
+    this.seq = new MorphSequence(seq, seqOpts);
+    this.heartHoldMs = heartHoldMs;
+    this.heartCooldownMs = heartCooldownMs;
+    this.zodiacHoldMs = zodiacHoldMs;
+    this.zodiacCooldownMs = zodiacCooldownMs;
+    this._oneSince = 0;
+    this._heartUntil = 0;
+    this._twoSince = 0;
+    this._zodiacUntil = 0;
+    this._armed = true;     // 一次「按住」只触发一次，松开手指才重新装填
+    this._twoArmed = true;
+  }
+
+  /**
+   * @param {number} count 当前手指数量（0~5，-1 = 没有手）
+   * @param {number} now 毫秒
+   * @returns {'none'|'text'|'heart'|'zodiac'}
+   */
+  update(count, now) {
+    if (count == null || count < 0) {
+      this._oneSince = 0;
+      return 'none';
+    }
+
+    if (count === 1) {
+      if (!this._oneSince) this._oneSince = now;
+    } else {
+      this._oneSince = 0;
+      this._armed = true;      // 手指放下来了，下次再比 1 才能再触发
+    }
+
+    if (count === 2) {
+      if (!this._twoSince) this._twoSince = now;
+    } else {
+      this._twoSince = 0;
+      this._twoArmed = true;
+    }
+
+    // 序列先跑：1 之后如果接上了 2，就把「爱心」的可能排掉
+    if (this.seq.update(count, now)) {
+      this._oneSince = 0;
+      return 'text';
+    }
+
+    // 只比「2」并停住 → 生肖（但 1→2 已经在走序列时不算）
+    const heldTwo = count === 2 && this._twoSince && now - this._twoSince >= this.zodiacHoldMs;
+    if (heldTwo && this._twoArmed && this.seq.step === 0 && now >= this._zodiacUntil) {
+      this._zodiacUntil = now + this.zodiacCooldownMs;
+      this._twoArmed = false;
+      this._twoSince = now;
+      return 'zodiac';
+    }
+
+    const heldOne = count === 1 && this._oneSince && now - this._oneSince >= this.heartHoldMs;
+    if (heldOne && this._armed && now >= this._heartUntil) {
+      this._armed = false;
+      this._heartUntil = now + this.heartCooldownMs;
+      this.seq.reset();          // 这个 1 算爱心，不算序列第一步
+      this._oneSince = now;
+      return 'heart';
+    }
+
+    return 'none';
   }
 }

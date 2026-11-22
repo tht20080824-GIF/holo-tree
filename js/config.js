@@ -29,17 +29,23 @@ export const CONFIG = {
     yawRange: 1.15,        // 兼容旧逻辑保留，用于手部像素映射的上限
     pitchRange: 0.3,       // 上下最大仰角 ≈ 17°
     deadzone: 0.08,        // 画面中心死区（0~1）
-    follow: 5.5,           // 跟随刚度，越大越跟手越容易抖
+    follow: 7.0,           // 跟随刚度，越大越跟手越容易抖
 
     // --- 判向持续旋转（新交互） ---
-    steerEnter: 0.30,      // 手的横向偏移超过它 → 判定为「往这个方向转」（越低越果断）
-    steerHold: 0.06,       // 方向要保持多久才生效（秒）；手甩得快时会被速度直接抢判，不等这个时间
-    steerSpeed: 0.62,      // 基础持续转速（弧度/秒 ≈ 35°/s）
-    steerBoost: 0.9,       // 手速带来的额外倍率上限：最快 ≈ 1.9 倍速
-    steerRefSpeed: 1.4,    // 达到满加成所需的手速（画面宽度/秒）
-    steerKickSpeed: 1.2,   // 横向手速超过它，方向立刻生效，不等 steerHold
-    centerStop: 0.18,      // 手回到中心 ±18% 内持续 centerStopTime 秒 → 停止转向
-    centerStopTime: 0.8,
+    steerEnter: 0.20,      // 手的横向偏移超过它 → 判定为「往这个方向转」（越低越果断）
+    steerHold: 0.03,       // 方向要保持多久才生效（秒）；手甩得快时会被速度直接抢判，不等这个时间
+    steerSpeed: 0.85,      // 基础持续转速（弧度/秒 ≈ 49°/s）
+    steerMinMul: 0.55,     // 刚过门限时的转速系数（手越靠边越接近 1）
+    steerBoost: 1.1,       // 手速带来的额外倍率上限：最快 ≈ 2.1 倍速
+    steerRefSpeed: 1.1,    // 达到满加成所需的手速（画面宽度/秒）
+    steerKickSpeed: 0.9,   // 横向手速超过它，方向立刻生效，不等 steerHold
+    centerStop: 0.26,      // 手回到中心 ±26% 内持续 centerStopTime 秒 → 停止转向
+    centerStopTime: 0.45,
+
+    // --- 甩手冲量：手快速划一下，直接给一个明显的角度，不用等转速积累 ---
+    flickYaw: 0.5,         // 一次横划给的角度（弧度 ≈ 29°）
+    flickPitch: 0.16,      // 一次竖划给的俯仰（弧度 ≈ 9°）
+    flickZoom: 0.16,       // 一次推/拉给的距离系数变化
 
     idleYawSpeed: 0.208,   // 自然自转：原来 0.16，按需求 ×1.3
     idleDelay: 0.6,        // 手离开后多久回落到自然自转（秒）
@@ -58,6 +64,31 @@ export const CONFIG = {
     openOn: 1.6,       // 五指张开度大于它=张开手掌（真手张开约 2.0）
     fistOn: 1.15,      // 张开度小于它=握拳（真手握拳约 0.9）
     holdTime: 0.3,     // 手势保持多久才切换形态（秒），防止误触
+  },
+
+  // 主动识别：把「手在动」翻译成明确意图（划动 / 推拉），而不是只吃左右位置
+  intent: {
+    windowMs: 280,        // 看最近多久的手部轨迹
+    minSpanMs: 110,       // 轨迹至少要有这么长的时间跨度
+    swipeDist: 0.20,      // 划动位移（画面宽度比例）超过它才算「划了一下」
+    swipeSpeed: 0.85,     // 划动速度（画面宽度/秒）下限，防止慢慢挪也触发
+    straightness: 0.72,   // 位移 / 实际路径，越小越弯；太弯不算划动（防画圈误触）
+    swipeCooldownMs: 300, // 两次划动之间至少隔这么久
+    pushScale: 0.26,      // 手掌尺度相对变化超过 26% → 推/拉
+    pushCooldownMs: 550,  // 推拉的冷却
+  },
+
+
+  // 收尾漩涡：从画面下方转上来，不是一下出现
+  vortex: {
+    count: 2600,       // 桌面粒子数；手机上 main.js 降到 1400
+    duration: 1.6,
+    rise: 14,
+    height: 26,
+    radius: 9.5,
+    turns: 2.4,
+    delay: 0.45,
+    fadeIn: 0.18,
   },
 
   intro: {

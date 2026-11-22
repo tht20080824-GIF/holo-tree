@@ -8,7 +8,7 @@
  */
 
 import { CONFIG } from './config.js';
-import { measureHand, GestureRecognizer, MorphSequence, GESTURE, MODE } from './gesture.js';
+import { measureHand, GestureRecognizer, GestureIntent, GestureRouter, GESTURE, INTENT, MODE } from './gesture.js';
 import { Rig } from './controls.js';
 import { HoloTree } from './tree.js';
 import { HandTracker } from './hands.js';
@@ -31,6 +31,7 @@ if (isTouchDevice || isSmallScreen) {
   CONFIG.ornaments.density = 0.6;   // 装饰粒子密度减半，手机才稳
   CONFIG.intro.count = 9000;
   CONFIG.intro.bloom = CONFIG.intro.mobileBloom;
+  CONFIG.vortex.count = 1400;   // 收尾漩涡也要降
 }
 
 // ---------------------------------------------------------------- 全局错误兜底
@@ -88,6 +89,7 @@ const els = {
 const ctx = els.canvas.getContext('2d');
 const rig = new Rig(CONFIG.rig);
 const recognizer = new GestureRecognizer(CONFIG.gesture);
+const intentRec = new GestureIntent(CONFIG.intent);
 
 let tree = null;
 try {
@@ -97,6 +99,7 @@ try {
   els.loaderText.textContent = '这台设备的浏览器不支持 WebGL，换个浏览器或开硬件加速再试';
   throw err;
 }
+
 
 // ------------------------------------------------------------------ 开场动画
 // 独立场景 + 独立 composer：播完就把整条序列 dispose 掉，主场景不受影响。
@@ -536,13 +539,32 @@ const GESTURE_LABEL = {
   [GESTURE.FIST]: '✊ 握拳',
 };
 
+// 主动识别到的动作，短时间显示在 HUD 上 —— 让用户知道"它认出来了"
+const INTENT_LABEL = {
+  [INTENT.SWIPE_LEFT]: '👈 左划 · 左转',
+  [INTENT.SWIPE_RIGHT]: '👉 右划 · 右转',
+  [INTENT.SWIPE_UP]: '👆 上划 · 抬头',
+  [INTENT.SWIPE_DOWN]: '👇 下划 · 低头',
+  [INTENT.PUSH]: '🫱 推近 · 拉近',
+  [INTENT.PULL]: '🫲 拉远 · 后退',
+};
+let intentFlash = '';
+let intentFlashUntil = 0;
+
+
 let lastTime = performance.now();
 let firstFrame = true;
 let lastDebugAt = 0;
 
 // ---------------------------------------------------------------- 手势序列 → 粒子文字
 // 1 → 2 → 3 → 五指张开，触发粒子变形文字；3 秒内锁定交互
-const morphSeq = new MorphSequence([1, 2, 3, 5]);
+// 手势仲裁：单独「1」停住 = 爱心；1→2→3→5 = 文字
+const morphRouter = new GestureRouter([1, 2, 3, 5], {
+  holdMs: 130,
+  resetMs: 4000,
+  cooldownMs: 1500,
+  heartHoldMs: 800,
+});
 let morphLockUntil = 0;
 
 function fingerCountOf(out) {
@@ -560,13 +582,43 @@ function triggerMorph() {
   toast(`✍️ ${text}`);
 }
 
+/** 手势「2」停住 → 把输入框里的生肖变成粒子形状（只认十二生肖） */
+function triggerZodiac() {
+  if (tree.focusedPhoto) closePhoto();
+  closeCaptionModal();
+  const raw = (els.morphInput?.value || '').trim();
+  if (!raw) {
+    toast('✍️ 先在上面输入一个生肖：鼠 牛 虎 兔 龙 蛇 马 羊 猴 鸡 狗 猪');
+    return;
+  }
+  if (!tree.showZodiac(raw)) {
+    toast('只认十二生肖：鼠 牛 虎 兔 龙 蛇 马 羊 猴 鸡 狗 猪');
+    return;
+  }
+  morphLockUntil = performance.now() + 3000;
+  toast(`✨ ${raw}`);
+}
+
+/** 手势「1」停住 → 粒子散开、聚成爱心 */
+function triggerHeart() {
+  if (tree.focusedPhoto) closePhoto();
+  closeCaptionModal();
+  if (!tree.showHeart()) return;
+  morphLockUntil = performance.now() + 3000;
+  toast('❤️ 爱心');
+}
+
 function feedMorphGesture(out, now) {
   if (!tree || tree.textActive) return;
   if (now < morphLockUntil) return;
   const count = fingerCountOf(out);
   if (count < 0) return;
-  if (morphSeq.update(count, now)) triggerMorph();
+  const action = morphRouter.update(count, now);
+  if (action === 'text') triggerMorph();
+  else if (action === 'heart') triggerHeart();
+  else if (action === 'zodiac') triggerZodiac();
 }
+
 
 // ---------------------------------------------------------------- 帧率控制
 // ---------------------------------------------------------------- 帧率控制
@@ -646,7 +698,43 @@ function frame(now) {
   }
 
   const out = recognizer.update(latestHand, dt);
+
+  // 接回流程（散开 → 聚合）期间：所有用户输入一律不生效。
+  // 手势、捏合、形态切换、转向、缩放全部让路，直到树完全恢复才交还控制权。
+  rig.locked = !!tree.restoring;
+  if (tree.restoring) {
+    rig.update(dt, null);
+    tree.update(dt, rig);
+    els.gesture.textContent = '🔄 恢复中';
+    els.mode.textContent = '散开 → 聚合（完成前不响应手势）';
+    els.handDot.classList.remove('on');
+    if (now - lastFpsHudAt > 500) {
+      lastFpsHudAt = now;
+      els.fps.textContent = `${renderFps.toFixed(0)} fps · 画质 ${(qualityScale * 100).toFixed(0)}%`;
+    }
+    return;
+  }
+
   feedMorphGesture(out, now);
+
+  // 主动意图：手划一下 / 推一下，就直接识别成动作，不用等转速慢慢积累
+  // 捏合（要点相框）和看照片时不做意图识别：那会儿手本来就在快速移动，别误判成划动
+  if (out.pinched || tree.focusedPhoto) {
+    intentRec.reset();
+  } else {
+    const intent = intentRec.update(out.hand, now);
+    if (intent.intent !== INTENT.NONE) {
+      const s = intent.strength;
+      if (intent.intent === INTENT.SWIPE_RIGHT) rig.flickYaw(1, s);
+      else if (intent.intent === INTENT.SWIPE_LEFT) rig.flickYaw(-1, s);
+      else if (intent.intent === INTENT.SWIPE_UP) rig.flickPitch(1, s);
+      else if (intent.intent === INTENT.SWIPE_DOWN) rig.flickPitch(-1, s);
+      else if (intent.intent === INTENT.PUSH) rig.flickZoom(-s);   // 推向镜头 = 靠近
+      else if (intent.intent === INTENT.PULL) rig.flickZoom(s);    // 拉远 = 后退
+      intentFlash = INTENT_LABEL[intent.intent] ?? intent.intent;
+      intentFlashUntil = now + 900;
+    }
+  }
 
   // 手势切换形态（张开/握拳）
   if (out.modeChanged) switchMode(out.modeChanged);
@@ -682,7 +770,9 @@ function frame(now) {
   }
 
   // HUD
-  els.gesture.textContent = GESTURE_LABEL[out.gesture] ?? out.gesture;
+  els.gesture.textContent = now < intentFlashUntil
+    ? intentFlash
+    : (GESTURE_LABEL[out.gesture] ?? out.gesture);
   const dirText = rig.spinDir > 0 ? '▶ 右转' : rig.spinDir < 0 ? '◀ 左转' : '自然自转';
   els.mode.textContent = `${rig.mode === MODE.TREE ? '合拢' : '散开'} · ${dirText}`;
   if (now - lastFpsHudAt > 500) {

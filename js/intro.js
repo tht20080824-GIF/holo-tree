@@ -186,11 +186,12 @@ export class IntroSequence {
 
       // --- 星尘：预存「单位矢量 × 半径」，每帧只做一次全局旋转 ---
       const dAng = Math.random() * Math.PI * 2;
-      const dR = baseRadius * (1.9 + Math.pow(Math.random(), 0.65) * 2.4);
+      // 盘中间留洞：内半径 1.35，外半径 4.3（视频里那个"黑洞"）
+      const dR = baseRadius * (1.35 + Math.pow(Math.random(), 0.6) * 2.95);
       this.dustX[i] = Math.cos(dAng) * dR;
       this.dustZ[i] = Math.sin(dAng) * dR;
       this.dustY[i] = (Math.random() - 0.5) * height * 0.09;
-      rims[i] = Math.min(1, dR / (baseRadius * 4.3));
+      rims[i] = Math.min(1, Math.max(0, (dR - baseRadius * 1.2) / (baseRadius * 3.1)));
 
       // --- 爆散方向（略偏镜头） ---
       const a = Math.random() * Math.PI * 2;
@@ -267,11 +268,10 @@ export class IntroSequence {
     const g = ctx.createRadialGradient(cx, cx, 0, cx, cx, cx);
     g.addColorStop(0.00, 'rgba(255,220,150,0)');
     g.addColorStop(0.36, 'rgba(255,220,150,0)');
-    g.addColorStop(0.43, 'rgba(255,226,170,0.30)');   // 内沿，勾出"洞"
-    g.addColorStop(0.50, 'rgba(255,226,170,0.05)');
-    g.addColorStop(0.84, 'rgba(255,214,140,0)');
-    g.addColorStop(0.92, 'rgba(255,236,190,0.95)');   // 外沿，主圆
-    g.addColorStop(0.965, 'rgba(255,205,120,0.30)');
+    g.addColorStop(0.30, 'rgba(255,226,170,0.55)');   // 洞的边缘
+    g.addColorStop(0.36, 'rgba(255,226,170,0.10)');
+    g.addColorStop(0.80, 'rgba(255,214,140,0)');
+    g.addColorStop(0.94, 'rgba(255,236,190,0.45)');   // 外沿做软，边缘交给粒子自己定义
     g.addColorStop(1.00, 'rgba(255,205,120,0)');
     ctx.fillStyle = g;
     ctx.beginPath();
@@ -295,6 +295,36 @@ export class IntroSequence {
     this.guide.rotation.x = -Math.PI / 2 + DUST_TILT_TARGET;
     this.guide.scale.setScalar(this.dustFit || 1);
     this.world.add(this.guide);
+
+    // 洞里的亮核：视频里那颗过曝的白点
+    const cs = 256;
+    const cv = document.createElement('canvas');
+    cv.width = cv.height = cs;
+    const cctx = cv.getContext('2d');
+    const cg = cctx.createRadialGradient(cs / 2, cs / 2, 0, cs / 2, cs / 2, cs / 2);
+    cg.addColorStop(0.0, 'rgba(255,255,255,1)');
+    cg.addColorStop(0.22, 'rgba(255,244,214,0.92)');
+    cg.addColorStop(0.5, 'rgba(255,206,130,0.35)');
+    cg.addColorStop(1.0, 'rgba(0,0,0,0)');
+    cctx.fillStyle = cg;
+    cctx.fillRect(0, 0, cs, cs);
+    const ctex = new THREE.CanvasTexture(cv);
+    ctex.colorSpace = THREE.SRGBColorSpace;
+
+    this.coreSprite = new THREE.Sprite(
+      new THREE.SpriteMaterial({
+        map: ctex,
+        transparent: true,
+        opacity: 0,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false,
+        depthTest: false,
+        toneMapped: false,
+      }),
+    );
+    this.coreSprite.renderOrder = 3;
+    this.coreSprite.scale.setScalar((this.dustFit || 1) * 0.46);
+    this.world.add(this.coreSprite);
   }
 
   _buildFireworks() {
@@ -500,7 +530,15 @@ export class IntroSequence {
       sizeScale = 1 + 0.2 * rimK;
       this._guideOpen = open;
       this._guideScale = this.dustFit * shrink;
+
+      // 亮核：随圆环张开一起亮，收环时收掉
+      if (this.coreSprite) {
+        const on = clamp01((t - 0.55) / 0.6) * (1 - clamp01((t - 2.35) / 0.5));
+        this.coreSprite.material.opacity = 0.95 * on;
+        this.coreSprite.scale.setScalar((this.dustFit || 1) * (0.44 + 0.04 * on));
+      }
     } else if (t < T.riseEnd) {
+      if (this.coreSprite) this.coreSprite.material.opacity = 0;
       // B. 螺旋垒树：按高度分配延迟 + 全局额外旋转
       const p = shiftProgress(t, T.gatherEnd, T.riseEnd);
       const extra = (1 - easeOutCubic(p)) * Math.PI * 2;

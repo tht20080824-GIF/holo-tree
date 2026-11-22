@@ -40,6 +40,7 @@ export class Rig {
     this.distanceTarget = 1;
 
     this.handActive = false;
+    this.locked = false;     // 接回流程期间：用户输入一律不生效
     this._idleTime = 0;
 
     // 判向持续旋转的状态
@@ -50,6 +51,9 @@ export class Rig {
     this._lastHandX = null;
     this.vx = 0;            // 手的横向速度（画面宽度/秒，平滑后）
     this.speedMul = 1;      // 手速带来的转速倍率
+    this._steerMul = 1;     // 手的位置带来的转速倍率（越靠边越快）
+    this.pitchImpulse = 0;  // 竖划冲量（衰减）
+    this.zoomImpulse = 0;   // 推拉冲量（衰减）
 
     // 手机倾斜控制（js/gyro.js 驱动）
     this.gyroEnabled = false;
@@ -84,14 +88,17 @@ export class Rig {
 
   /** 鼠标拖拽：直接推动目标角，不经过平滑，交给 update 里的插值去消化 */
   nudgeYaw(dx) {
+    if (this.locked) return;
     this.yawTarget += dx * this.cfg.pointerYaw;
   }
 
   nudgePitch(dy) {
+    if (this.locked) return;
     this.pitchTarget = clamp(this.pitchTarget + dy * this.cfg.pointerPitch, -this.cfg.pitchRange, this.cfg.pitchRange);
   }
 
   nudgeZoom(delta) {
+    if (this.locked) return;
     this.distanceTarget = clamp(
       this.distanceTarget + delta * this.cfg.wheelZoom,
       this.cfg.zoomNear,
@@ -99,13 +106,41 @@ export class Rig {
     );
   }
 
+  /** 甩手横划：直接给一个角度冲量，手一划就有明显反馈 */
+  flickYaw(dir, strength = 1) {
+    if (!dir || this.locked) return;
+    const s = clamp(strength, 0, 1.2);
+    this.yawTarget += Math.sign(dir) * this.cfg.flickYaw * s;
+    this.spinDir = Math.sign(dir);   // 顺势保持这个方向继续转
+    this._centerTime = 0;
+  }
+
+  /** 甩手竖划：抬头 / 低头（冲量叠在位置映射上，随后自然衰减） */
+  flickPitch(dir, strength = 1) {
+    if (!dir || this.locked) return;
+    const s = clamp(strength, 0, 1.2);
+    this.pitchImpulse = clamp(this.pitchImpulse + Math.sign(dir) * this.cfg.flickPitch * s, -0.45, 0.45);
+  }
+
+  /** 推/拉：正数 = 后退，负数 = 靠近 */
+  flickZoom(delta) {
+    if (this.locked) return;
+    this.zoomImpulse = clamp(this.zoomImpulse + delta * this.cfg.flickZoom, -0.5, 0.5);
+  }
+
   /**
    * @param {number} dt 秒
    * @param {object|null} hand measureHand() 的结果，null 表示当前没有手
    */
   update(dt, hand) {
+    if (this.locked) return this;   // 接回流程：连自动旋转都停住，等树恢复
+
     const c = this.cfg;
     const k = 1 - Math.exp(-c.follow * dt); // 指数平滑，且与帧率无关
+
+    // 甩手冲量自然衰减（约 0.3~0.4 秒回落到无）
+    this.pitchImpulse *= Math.exp(-3.2 * dt);
+    this.zoomImpulse *= Math.exp(-2.6 * dt);
 
     if (hand) {
       this.handActive = true;
@@ -122,6 +157,10 @@ export class Rig {
       this._lastHandX = hand.x;
       const speedAbs = Math.min(Math.abs(this.vx) / c.steerRefSpeed, 1);
       this.speedMul = 1 + speedAbs * c.steerBoost;
+
+      // 手越靠边转得越快：刚过门限时慢一点（好停），靠到边上明显变快（够灵敏）
+      const mag = Math.min(Math.abs(nx), 1);
+      this._steerMul = c.steerMinMul + (1 - c.steerMinMul) * mag;
 
       // ---------- 判向：只看"手在哪一侧"，不管手是否停住 ----------
       const candidate = nx > c.steerEnter ? 1 : nx < -c.steerEnter ? -1 : 0;
@@ -150,9 +189,13 @@ export class Rig {
       }
 
       // 仰角、缩放仍然实时跟随（这两项跟"方向"不冲突）
-      this.pitchTarget = -ny * c.pitchRange;
+      this.pitchTarget = clamp(-ny * c.pitchRange + this.pitchImpulse, -c.pitchRange, c.pitchRange);
       const depth = clamp((hand.scale - c.handScaleFar) / (c.handScaleNear - c.handScaleFar), 0, 1);
-      this.distanceTarget = lerp(c.zoomFar, c.zoomNear, depth);
+      this.distanceTarget = clamp(
+        lerp(c.zoomFar, c.zoomNear, depth) + this.zoomImpulse,
+        c.zoomNear,
+        c.zoomFar,
+      );
     } else {
       this.handActive = false;
       this._idleTime += dt;
@@ -160,6 +203,7 @@ export class Rig {
       // 手离开后手速衰减，转速回落到基础值
       this.vx *= Math.exp(-6 * dt);
       this.speedMul += (1 - this.speedMul) * (1 - Math.exp(-4 * dt));
+      this._steerMul = 1;   // 手不在画面里，按基础转速继续
 
       if (this.gyroEnabled) {
         // 陀螺仪接管时：绝对角度跟随手机倾斜，且不自动旋转
@@ -173,9 +217,9 @@ export class Rig {
       }
     }
 
-    // ---------- 持续旋转：方向锁定后就一直转，手甩得越快转得越快 ----------
+    // ---------- 持续旋转：方向锁定后就一直转，手甩得越快、越靠边转得越快 ----------
     if (this.spinDir !== 0) {
-      this.yawTarget += this.spinDir * c.steerSpeed * this.speedMul * dt;
+      this.yawTarget += this.spinDir * c.steerSpeed * (this._steerMul ?? 1) * this.speedMul * dt;
     } else {
       this.yawTarget += c.idleYawSpeed * dt;
     }

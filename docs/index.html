@@ -693,13 +693,15 @@ body.ui-hidden #debug { opacity: 0; pointer-events: none; }
   <div id="legend">
     <div class="legend-title">怎么玩</div>
     <ul>
-      <li><b>移动手掌</b> 左右转 / 上下抬</li>
-      <li><b>手靠近镜头</b> 拉近，远离拉远</li>
+      <li><b>手划一下</b> 横划转身 / 竖划抬头 · 手停在一边会持续转</li>
+      <li><b>手推向镜头</b> 拉近，拉远后退</li>
       <li><b>五指张开</b> 散开 · <b>握拳</b> 合拢</li>
       <li><b>拇指食指捏合</b> 指相框展开照片，空着撒金粒子</li>
       <li><b>点相框</b> 也能展开 · 再点一下关闭</li>
       <li><b>＋ 加照片</b> 换成自己的照片（可多张）</li>
-      <li><b>1 → 2 → 3 → 张开</b> 粒子变成文字（3 秒后点一下收起）</li>
+      <li><b>比「1」停住</b> 粒子聚成爱心</li>
+      <li><b>比「2」停住</b> 输入框里写生肖（鼠牛虎兔龙蛇马羊猴鸡狗猪）→ 变成对应生肖</li>
+      <li><b>1 → 2 → 3 → 张开</b> 粒子变成文字（快速接着比才是文字，停住是爱心）</li>
       <li><b>点 ↻</b> 重播开场</li>
     </ul>
     <div class="legend-foot">没有摄像头？鼠标拖拽 + 滚轮同样能玩</div>
@@ -724,7 +726,7 @@ body.ui-hidden #debug { opacity: 0; pointer-events: none; }
 
   <div id="toast"></div>
 
-  <script>window.__HOLO_NO_VENDOR__ = true; window.__HOLO_BUILD__ = "2026-11-22T11:25:59.436Z";</script>
+  <script>window.__HOLO_NO_VENDOR__ = true; window.__HOLO_BUILD__ = "2026-11-22T15:35:16.598Z";</script>
 <script>
 /* 由 tools/bundle.mjs 生成 —— 不要手改，改源码后重新构建 */
 (function () {
@@ -747,7 +749,7 @@ body.ui-hidden #debug { opacity: 0; pointer-events: none; }
  */
 
 const { CONFIG } = __require("js/config.js");
-const { measureHand, GestureRecognizer, MorphSequence, GESTURE, MODE } = __require("js/gesture.js");
+const { measureHand, GestureRecognizer, GestureIntent, GestureRouter, GESTURE, INTENT, MODE } = __require("js/gesture.js");
 const { Rig } = __require("js/controls.js");
 const { HoloTree } = __require("js/tree.js");
 const { HandTracker } = __require("js/hands.js");
@@ -770,6 +772,7 @@ if (isTouchDevice || isSmallScreen) {
   CONFIG.ornaments.density = 0.6;   // 装饰粒子密度减半，手机才稳
   CONFIG.intro.count = 9000;
   CONFIG.intro.bloom = CONFIG.intro.mobileBloom;
+  CONFIG.vortex.count = 1400;   // 收尾漩涡也要降
 }
 
 // ---------------------------------------------------------------- 全局错误兜底
@@ -827,6 +830,7 @@ const els = {
 const ctx = els.canvas.getContext('2d');
 const rig = new Rig(CONFIG.rig);
 const recognizer = new GestureRecognizer(CONFIG.gesture);
+const intentRec = new GestureIntent(CONFIG.intent);
 
 let tree = null;
 try {
@@ -836,6 +840,7 @@ try {
   els.loaderText.textContent = '这台设备的浏览器不支持 WebGL，换个浏览器或开硬件加速再试';
   throw err;
 }
+
 
 // ------------------------------------------------------------------ 开场动画
 // 独立场景 + 独立 composer：播完就把整条序列 dispose 掉，主场景不受影响。
@@ -1275,13 +1280,32 @@ const GESTURE_LABEL = {
   [GESTURE.FIST]: '✊ 握拳',
 };
 
+// 主动识别到的动作，短时间显示在 HUD 上 —— 让用户知道"它认出来了"
+const INTENT_LABEL = {
+  [INTENT.SWIPE_LEFT]: '👈 左划 · 左转',
+  [INTENT.SWIPE_RIGHT]: '👉 右划 · 右转',
+  [INTENT.SWIPE_UP]: '👆 上划 · 抬头',
+  [INTENT.SWIPE_DOWN]: '👇 下划 · 低头',
+  [INTENT.PUSH]: '🫱 推近 · 拉近',
+  [INTENT.PULL]: '🫲 拉远 · 后退',
+};
+let intentFlash = '';
+let intentFlashUntil = 0;
+
+
 let lastTime = performance.now();
 let firstFrame = true;
 let lastDebugAt = 0;
 
 // ---------------------------------------------------------------- 手势序列 → 粒子文字
 // 1 → 2 → 3 → 五指张开，触发粒子变形文字；3 秒内锁定交互
-const morphSeq = new MorphSequence([1, 2, 3, 5]);
+// 手势仲裁：单独「1」停住 = 爱心；1→2→3→5 = 文字
+const morphRouter = new GestureRouter([1, 2, 3, 5], {
+  holdMs: 130,
+  resetMs: 4000,
+  cooldownMs: 1500,
+  heartHoldMs: 800,
+});
 let morphLockUntil = 0;
 
 function fingerCountOf(out) {
@@ -1299,13 +1323,43 @@ function triggerMorph() {
   toast(`✍️ ${text}`);
 }
 
+/** 手势「2」停住 → 把输入框里的生肖变成粒子形状（只认十二生肖） */
+function triggerZodiac() {
+  if (tree.focusedPhoto) closePhoto();
+  closeCaptionModal();
+  const raw = (els.morphInput?.value || '').trim();
+  if (!raw) {
+    toast('✍️ 先在上面输入一个生肖：鼠 牛 虎 兔 龙 蛇 马 羊 猴 鸡 狗 猪');
+    return;
+  }
+  if (!tree.showZodiac(raw)) {
+    toast('只认十二生肖：鼠 牛 虎 兔 龙 蛇 马 羊 猴 鸡 狗 猪');
+    return;
+  }
+  morphLockUntil = performance.now() + 3000;
+  toast(`✨ ${raw}`);
+}
+
+/** 手势「1」停住 → 粒子散开、聚成爱心 */
+function triggerHeart() {
+  if (tree.focusedPhoto) closePhoto();
+  closeCaptionModal();
+  if (!tree.showHeart()) return;
+  morphLockUntil = performance.now() + 3000;
+  toast('❤️ 爱心');
+}
+
 function feedMorphGesture(out, now) {
   if (!tree || tree.textActive) return;
   if (now < morphLockUntil) return;
   const count = fingerCountOf(out);
   if (count < 0) return;
-  if (morphSeq.update(count, now)) triggerMorph();
+  const action = morphRouter.update(count, now);
+  if (action === 'text') triggerMorph();
+  else if (action === 'heart') triggerHeart();
+  else if (action === 'zodiac') triggerZodiac();
 }
+
 
 // ---------------------------------------------------------------- 帧率控制
 // ---------------------------------------------------------------- 帧率控制
@@ -1385,7 +1439,43 @@ function frame(now) {
   }
 
   const out = recognizer.update(latestHand, dt);
+
+  // 接回流程（散开 → 聚合）期间：所有用户输入一律不生效。
+  // 手势、捏合、形态切换、转向、缩放全部让路，直到树完全恢复才交还控制权。
+  rig.locked = !!tree.restoring;
+  if (tree.restoring) {
+    rig.update(dt, null);
+    tree.update(dt, rig);
+    els.gesture.textContent = '🔄 恢复中';
+    els.mode.textContent = '散开 → 聚合（完成前不响应手势）';
+    els.handDot.classList.remove('on');
+    if (now - lastFpsHudAt > 500) {
+      lastFpsHudAt = now;
+      els.fps.textContent = `${renderFps.toFixed(0)} fps · 画质 ${(qualityScale * 100).toFixed(0)}%`;
+    }
+    return;
+  }
+
   feedMorphGesture(out, now);
+
+  // 主动意图：手划一下 / 推一下，就直接识别成动作，不用等转速慢慢积累
+  // 捏合（要点相框）和看照片时不做意图识别：那会儿手本来就在快速移动，别误判成划动
+  if (out.pinched || tree.focusedPhoto) {
+    intentRec.reset();
+  } else {
+    const intent = intentRec.update(out.hand, now);
+    if (intent.intent !== INTENT.NONE) {
+      const s = intent.strength;
+      if (intent.intent === INTENT.SWIPE_RIGHT) rig.flickYaw(1, s);
+      else if (intent.intent === INTENT.SWIPE_LEFT) rig.flickYaw(-1, s);
+      else if (intent.intent === INTENT.SWIPE_UP) rig.flickPitch(1, s);
+      else if (intent.intent === INTENT.SWIPE_DOWN) rig.flickPitch(-1, s);
+      else if (intent.intent === INTENT.PUSH) rig.flickZoom(-s);   // 推向镜头 = 靠近
+      else if (intent.intent === INTENT.PULL) rig.flickZoom(s);    // 拉远 = 后退
+      intentFlash = INTENT_LABEL[intent.intent] ?? intent.intent;
+      intentFlashUntil = now + 900;
+    }
+  }
 
   // 手势切换形态（张开/握拳）
   if (out.modeChanged) switchMode(out.modeChanged);
@@ -1421,7 +1511,9 @@ function frame(now) {
   }
 
   // HUD
-  els.gesture.textContent = GESTURE_LABEL[out.gesture] ?? out.gesture;
+  els.gesture.textContent = now < intentFlashUntil
+    ? intentFlash
+    : (GESTURE_LABEL[out.gesture] ?? out.gesture);
   const dirText = rig.spinDir > 0 ? '▶ 右转' : rig.spinDir < 0 ? '◀ 左转' : '自然自转';
   els.mode.textContent = `${rig.mode === MODE.TREE ? '合拢' : '散开'} · ${dirText}`;
   if (now - lastFpsHudAt > 500) {
@@ -1627,17 +1719,23 @@ const CONFIG = {
     yawRange: 1.15,        // 兼容旧逻辑保留，用于手部像素映射的上限
     pitchRange: 0.3,       // 上下最大仰角 ≈ 17°
     deadzone: 0.08,        // 画面中心死区（0~1）
-    follow: 5.5,           // 跟随刚度，越大越跟手越容易抖
+    follow: 7.0,           // 跟随刚度，越大越跟手越容易抖
 
     // --- 判向持续旋转（新交互） ---
-    steerEnter: 0.30,      // 手的横向偏移超过它 → 判定为「往这个方向转」（越低越果断）
-    steerHold: 0.06,       // 方向要保持多久才生效（秒）；手甩得快时会被速度直接抢判，不等这个时间
-    steerSpeed: 0.62,      // 基础持续转速（弧度/秒 ≈ 35°/s）
-    steerBoost: 0.9,       // 手速带来的额外倍率上限：最快 ≈ 1.9 倍速
-    steerRefSpeed: 1.4,    // 达到满加成所需的手速（画面宽度/秒）
-    steerKickSpeed: 1.2,   // 横向手速超过它，方向立刻生效，不等 steerHold
-    centerStop: 0.18,      // 手回到中心 ±18% 内持续 centerStopTime 秒 → 停止转向
-    centerStopTime: 0.8,
+    steerEnter: 0.20,      // 手的横向偏移超过它 → 判定为「往这个方向转」（越低越果断）
+    steerHold: 0.03,       // 方向要保持多久才生效（秒）；手甩得快时会被速度直接抢判，不等这个时间
+    steerSpeed: 0.85,      // 基础持续转速（弧度/秒 ≈ 49°/s）
+    steerMinMul: 0.55,     // 刚过门限时的转速系数（手越靠边越接近 1）
+    steerBoost: 1.1,       // 手速带来的额外倍率上限：最快 ≈ 2.1 倍速
+    steerRefSpeed: 1.1,    // 达到满加成所需的手速（画面宽度/秒）
+    steerKickSpeed: 0.9,   // 横向手速超过它，方向立刻生效，不等 steerHold
+    centerStop: 0.26,      // 手回到中心 ±26% 内持续 centerStopTime 秒 → 停止转向
+    centerStopTime: 0.45,
+
+    // --- 甩手冲量：手快速划一下，直接给一个明显的角度，不用等转速积累 ---
+    flickYaw: 0.5,         // 一次横划给的角度（弧度 ≈ 29°）
+    flickPitch: 0.16,      // 一次竖划给的俯仰（弧度 ≈ 9°）
+    flickZoom: 0.16,       // 一次推/拉给的距离系数变化
 
     idleYawSpeed: 0.208,   // 自然自转：原来 0.16，按需求 ×1.3
     idleDelay: 0.6,        // 手离开后多久回落到自然自转（秒）
@@ -1656,6 +1754,31 @@ const CONFIG = {
     openOn: 1.6,       // 五指张开度大于它=张开手掌（真手张开约 2.0）
     fistOn: 1.15,      // 张开度小于它=握拳（真手握拳约 0.9）
     holdTime: 0.3,     // 手势保持多久才切换形态（秒），防止误触
+  },
+
+  // 主动识别：把「手在动」翻译成明确意图（划动 / 推拉），而不是只吃左右位置
+  intent: {
+    windowMs: 280,        // 看最近多久的手部轨迹
+    minSpanMs: 110,       // 轨迹至少要有这么长的时间跨度
+    swipeDist: 0.20,      // 划动位移（画面宽度比例）超过它才算「划了一下」
+    swipeSpeed: 0.85,     // 划动速度（画面宽度/秒）下限，防止慢慢挪也触发
+    straightness: 0.72,   // 位移 / 实际路径，越小越弯；太弯不算划动（防画圈误触）
+    swipeCooldownMs: 300, // 两次划动之间至少隔这么久
+    pushScale: 0.26,      // 手掌尺度相对变化超过 26% → 推/拉
+    pushCooldownMs: 550,  // 推拉的冷却
+  },
+
+
+  // 收尾漩涡：从画面下方转上来，不是一下出现
+  vortex: {
+    count: 2600,       // 桌面粒子数；手机上 main.js 降到 1400
+    duration: 1.6,
+    rise: 14,
+    height: 26,
+    radius: 9.5,
+    turns: 2.4,
+    delay: 0.45,
+    fadeIn: 0.18,
   },
 
   intro: {
@@ -1744,6 +1867,130 @@ const GESTURE = Object.freeze({
 });
 
 const MODE = Object.freeze({ TREE: 'TREE', SCATTER: 'SCATTER', TEXT: 'TEXT' });
+
+/**
+ * 主动意图：把「手在动」翻译成明确的动作，而不是只吃左右位置。
+ *
+ * 之前只有「手停在左边/右边 → 一直转」，手划一下跟手停住没区别，
+ * 用户会觉得"我明明甩了一下，它却没反应"。这里额外识别两类动作：
+ *   - 划动：短时间内的直线位移（横划转身、竖划抬头）
+ *   - 推拉：手掌尺度的快速变化（推向镜头 = 靠近，拉远 = 后退）
+ */
+const INTENT = Object.freeze({
+  NONE: 'NONE',
+  SWIPE_LEFT: 'SWIPE_LEFT',
+  SWIPE_RIGHT: 'SWIPE_RIGHT',
+  SWIPE_UP: 'SWIPE_UP',
+  SWIPE_DOWN: 'SWIPE_DOWN',
+  PUSH: 'PUSH',   // 手推向镜头（画面里手变大）→ 应该靠近
+  PULL: 'PULL',   // 手拉远（画面里手变小）→ 应该后退
+});
+
+/**
+ * 意图识别器：纯计算，能吃单测。
+ *
+ * 判据刻意写得"严格一点"：位移够长、速度够快、路径够直，三者同时满足才算划动。
+ * 只满足一个的话，手在画面里随便晃两下就会误触发，比不灵敏更难受。
+ */
+class GestureIntent {
+  constructor(cfg = {}) {
+    this.cfg = {
+      windowMs: 280,
+      minSpanMs: 110,
+      swipeDist: 0.2,
+      swipeSpeed: 0.85,
+      straightness: 0.72,
+      swipeCooldownMs: 300,
+      pushScale: 0.26,
+      pushCooldownMs: 550,
+      ...cfg,
+    };
+    this._buf = [];
+    this._lastAt = new Map();
+  }
+
+  reset() {
+    this._buf.length = 0;
+  }
+
+  _cooldownMs(intent) {
+    return intent === INTENT.PUSH || intent === INTENT.PULL
+      ? this.cfg.pushCooldownMs
+      : this.cfg.swipeCooldownMs;
+  }
+
+  _ready(intent, now) {
+    const last = this._lastAt.has(intent) ? this._lastAt.get(intent) : -Infinity;
+    return now - last >= this._cooldownMs(intent);
+  }
+
+  /** 触发后清空轨迹：同一段挥动不能连续触发两次 */
+  _fire(intent, now, strength) {
+    this._lastAt.set(intent, now);
+    this._buf.length = 0;
+    return { intent, strength, at: now };
+  }
+
+  /**
+   * @param {object|null} hand measureHand() 的结果
+   * @param {number} now 毫秒
+   * @returns {{intent:string, strength:number}}
+   */
+  update(hand, now) {
+    const none = { intent: INTENT.NONE, strength: 0 };
+    if (!hand) {
+      this.reset();
+      return none;
+    }
+
+    const c = this.cfg;
+    const b = this._buf;
+    b.push({ t: now, x: hand.x, y: hand.y, s: hand.scale });
+    while (b.length > 1 && now - b[0].t > c.windowMs) b.shift();
+
+    const first = b[0];
+    const last = b[b.length - 1];
+    const spanMs = last.t - first.t;
+    if (spanMs < c.minSpanMs) return none;
+    const span = spanMs / 1000;
+
+    // 实际路径长度：位移/路径 = 直线度，画圈时这个值会很低
+    let path = 0;
+    for (let i = 1; i < b.length; i++) {
+      path += Math.hypot(b[i].x - b[i - 1].x, b[i].y - b[i - 1].y);
+    }
+
+    const dx = last.x - first.x;
+    const dy = last.y - first.y;
+    const dist = Math.hypot(dx, dy);
+    const speed = dist / span;
+    const straight = path > 1e-6 ? dist / path : 0;
+
+    // 1) 划动优先（比推拉更"有意图"）
+    if (dist >= c.swipeDist && speed >= c.swipeSpeed && straight >= c.straightness) {
+      const horizontal = Math.abs(dx) >= Math.abs(dy);
+      let intent;
+      if (horizontal) intent = dx > 0 ? INTENT.SWIPE_RIGHT : INTENT.SWIPE_LEFT;
+      else intent = dy > 0 ? INTENT.SWIPE_DOWN : INTENT.SWIPE_UP;
+
+      if (this._ready(intent, now)) {
+        return this._fire(intent, now, Math.min(1, dist / (c.swipeDist * 2)));
+      }
+      return none;
+    }
+
+    // 2) 推拉：手掌尺度的相对变化
+    const ds = (last.s - first.s) / Math.max(first.s, 1e-4);
+    if (Math.abs(ds) >= c.pushScale) {
+      const intent = ds > 0 ? INTENT.PUSH : INTENT.PULL;
+      if (this._ready(intent, now)) {
+        return this._fire(intent, now, Math.min(1, Math.abs(ds) / (c.pushScale * 2)));
+      }
+    }
+
+    return none;
+  }
+}
 
 function dist2d(a, b) {
   return Math.hypot(a.x - b.x, a.y - b.y);
@@ -1901,6 +2148,15 @@ class MorphSequence {
     this.cooldownUntil = 0;
   }
 
+  /** 作废当前进度（比如这一下「1」被判成爱心了，不能再算序列第一步） */
+  reset() {
+    this.step = 0;
+    this.cand = -1;
+    this.stable = -1;
+    this.candAt = 0;
+    this.stepAt = 0;
+  }
+
   /** @returns {boolean} true = 序列完成，应该触发动作 */
   update(count, now) {
     if (count == null || count < 0) return false;
@@ -1936,12 +2192,100 @@ class MorphSequence {
   }
 }
 
+
+/**
+ * 「1 → 爱心」和「1→2→3→5 → 文字」的仲裁。
+ *
+ * 矛盾点：单独一个「1」既是爱心的手势，也是文字序列的第一步。光看一帧分不出来，
+ * 所以用「时间」来分辨用户的意图：
+ *   - 手指 1 立起来之后**很快**变成 2 → 他在走序列，继续等后面的 3、5；
+ *   - 手指 1 **停住不动**超过 heartHoldMs → 他就是想变爱心，直接抢过来。
+ *
+ * 抢过来之后会把序列作废，避免同一个「1」又被记成序列第一步。
+ */
+class GestureRouter {
+  constructor(seq = [1, 2, 3, 5], {
+    heartHoldMs = 800,
+    heartCooldownMs = 1600,
+    zodiacHoldMs = 800,
+    zodiacCooldownMs = 1800,
+    ...seqOpts
+  } = {}) {
+    this.seq = new MorphSequence(seq, seqOpts);
+    this.heartHoldMs = heartHoldMs;
+    this.heartCooldownMs = heartCooldownMs;
+    this.zodiacHoldMs = zodiacHoldMs;
+    this.zodiacCooldownMs = zodiacCooldownMs;
+    this._oneSince = 0;
+    this._heartUntil = 0;
+    this._twoSince = 0;
+    this._zodiacUntil = 0;
+    this._armed = true;     // 一次「按住」只触发一次，松开手指才重新装填
+    this._twoArmed = true;
+  }
+
+  /**
+   * @param {number} count 当前手指数量（0~5，-1 = 没有手）
+   * @param {number} now 毫秒
+   * @returns {'none'|'text'|'heart'|'zodiac'}
+   */
+  update(count, now) {
+    if (count == null || count < 0) {
+      this._oneSince = 0;
+      return 'none';
+    }
+
+    if (count === 1) {
+      if (!this._oneSince) this._oneSince = now;
+    } else {
+      this._oneSince = 0;
+      this._armed = true;      // 手指放下来了，下次再比 1 才能再触发
+    }
+
+    if (count === 2) {
+      if (!this._twoSince) this._twoSince = now;
+    } else {
+      this._twoSince = 0;
+      this._twoArmed = true;
+    }
+
+    // 序列先跑：1 之后如果接上了 2，就把「爱心」的可能排掉
+    if (this.seq.update(count, now)) {
+      this._oneSince = 0;
+      return 'text';
+    }
+
+    // 只比「2」并停住 → 生肖（但 1→2 已经在走序列时不算）
+    const heldTwo = count === 2 && this._twoSince && now - this._twoSince >= this.zodiacHoldMs;
+    if (heldTwo && this._twoArmed && this.seq.step === 0 && now >= this._zodiacUntil) {
+      this._zodiacUntil = now + this.zodiacCooldownMs;
+      this._twoArmed = false;
+      this._twoSince = now;
+      return 'zodiac';
+    }
+
+    const heldOne = count === 1 && this._oneSince && now - this._oneSince >= this.heartHoldMs;
+    if (heldOne && this._armed && now >= this._heartUntil) {
+      this._armed = false;
+      this._heartUntil = now + this.heartCooldownMs;
+      this.seq.reset();          // 这个 1 算爱心，不算序列第一步
+      this._oneSince = now;
+      return 'heart';
+    }
+
+    return 'none';
+  }
+}
+
 __exports["measureHand"] = measureHand;
+__exports["GestureIntent"] = GestureIntent;
 __exports["GestureRecognizer"] = GestureRecognizer;
 __exports["MorphSequence"] = MorphSequence;
+__exports["GestureRouter"] = GestureRouter;
 __exports["LANDMARK"] = LANDMARK;
 __exports["GESTURE"] = GESTURE;
 __exports["MODE"] = MODE;
+__exports["INTENT"] = INTENT;
   };
   __defs["js/controls.js"] = function (__require, __exports) {
 /**
@@ -1986,6 +2330,7 @@ class Rig {
     this.distanceTarget = 1;
 
     this.handActive = false;
+    this.locked = false;     // 接回流程期间：用户输入一律不生效
     this._idleTime = 0;
 
     // 判向持续旋转的状态
@@ -1996,6 +2341,9 @@ class Rig {
     this._lastHandX = null;
     this.vx = 0;            // 手的横向速度（画面宽度/秒，平滑后）
     this.speedMul = 1;      // 手速带来的转速倍率
+    this._steerMul = 1;     // 手的位置带来的转速倍率（越靠边越快）
+    this.pitchImpulse = 0;  // 竖划冲量（衰减）
+    this.zoomImpulse = 0;   // 推拉冲量（衰减）
 
     // 手机倾斜控制（js/gyro.js 驱动）
     this.gyroEnabled = false;
@@ -2030,14 +2378,17 @@ class Rig {
 
   /** 鼠标拖拽：直接推动目标角，不经过平滑，交给 update 里的插值去消化 */
   nudgeYaw(dx) {
+    if (this.locked) return;
     this.yawTarget += dx * this.cfg.pointerYaw;
   }
 
   nudgePitch(dy) {
+    if (this.locked) return;
     this.pitchTarget = clamp(this.pitchTarget + dy * this.cfg.pointerPitch, -this.cfg.pitchRange, this.cfg.pitchRange);
   }
 
   nudgeZoom(delta) {
+    if (this.locked) return;
     this.distanceTarget = clamp(
       this.distanceTarget + delta * this.cfg.wheelZoom,
       this.cfg.zoomNear,
@@ -2045,13 +2396,41 @@ class Rig {
     );
   }
 
+  /** 甩手横划：直接给一个角度冲量，手一划就有明显反馈 */
+  flickYaw(dir, strength = 1) {
+    if (!dir || this.locked) return;
+    const s = clamp(strength, 0, 1.2);
+    this.yawTarget += Math.sign(dir) * this.cfg.flickYaw * s;
+    this.spinDir = Math.sign(dir);   // 顺势保持这个方向继续转
+    this._centerTime = 0;
+  }
+
+  /** 甩手竖划：抬头 / 低头（冲量叠在位置映射上，随后自然衰减） */
+  flickPitch(dir, strength = 1) {
+    if (!dir || this.locked) return;
+    const s = clamp(strength, 0, 1.2);
+    this.pitchImpulse = clamp(this.pitchImpulse + Math.sign(dir) * this.cfg.flickPitch * s, -0.45, 0.45);
+  }
+
+  /** 推/拉：正数 = 后退，负数 = 靠近 */
+  flickZoom(delta) {
+    if (this.locked) return;
+    this.zoomImpulse = clamp(this.zoomImpulse + delta * this.cfg.flickZoom, -0.5, 0.5);
+  }
+
   /**
    * @param {number} dt 秒
    * @param {object|null} hand measureHand() 的结果，null 表示当前没有手
    */
   update(dt, hand) {
+    if (this.locked) return this;   // 接回流程：连自动旋转都停住，等树恢复
+
     const c = this.cfg;
     const k = 1 - Math.exp(-c.follow * dt); // 指数平滑，且与帧率无关
+
+    // 甩手冲量自然衰减（约 0.3~0.4 秒回落到无）
+    this.pitchImpulse *= Math.exp(-3.2 * dt);
+    this.zoomImpulse *= Math.exp(-2.6 * dt);
 
     if (hand) {
       this.handActive = true;
@@ -2068,6 +2447,10 @@ class Rig {
       this._lastHandX = hand.x;
       const speedAbs = Math.min(Math.abs(this.vx) / c.steerRefSpeed, 1);
       this.speedMul = 1 + speedAbs * c.steerBoost;
+
+      // 手越靠边转得越快：刚过门限时慢一点（好停），靠到边上明显变快（够灵敏）
+      const mag = Math.min(Math.abs(nx), 1);
+      this._steerMul = c.steerMinMul + (1 - c.steerMinMul) * mag;
 
       // ---------- 判向：只看"手在哪一侧"，不管手是否停住 ----------
       const candidate = nx > c.steerEnter ? 1 : nx < -c.steerEnter ? -1 : 0;
@@ -2096,9 +2479,13 @@ class Rig {
       }
 
       // 仰角、缩放仍然实时跟随（这两项跟"方向"不冲突）
-      this.pitchTarget = -ny * c.pitchRange;
+      this.pitchTarget = clamp(-ny * c.pitchRange + this.pitchImpulse, -c.pitchRange, c.pitchRange);
       const depth = clamp((hand.scale - c.handScaleFar) / (c.handScaleNear - c.handScaleFar), 0, 1);
-      this.distanceTarget = lerp(c.zoomFar, c.zoomNear, depth);
+      this.distanceTarget = clamp(
+        lerp(c.zoomFar, c.zoomNear, depth) + this.zoomImpulse,
+        c.zoomNear,
+        c.zoomFar,
+      );
     } else {
       this.handActive = false;
       this._idleTime += dt;
@@ -2106,6 +2493,7 @@ class Rig {
       // 手离开后手速衰减，转速回落到基础值
       this.vx *= Math.exp(-6 * dt);
       this.speedMul += (1 - this.speedMul) * (1 - Math.exp(-4 * dt));
+      this._steerMul = 1;   // 手不在画面里，按基础转速继续
 
       if (this.gyroEnabled) {
         // 陀螺仪接管时：绝对角度跟随手机倾斜，且不自动旋转
@@ -2119,9 +2507,9 @@ class Rig {
       }
     }
 
-    // ---------- 持续旋转：方向锁定后就一直转，手甩得越快转得越快 ----------
+    // ---------- 持续旋转：方向锁定后就一直转，手甩得越快、越靠边转得越快 ----------
     if (this.spinDir !== 0) {
-      this.yawTarget += this.spinDir * c.steerSpeed * this.speedMul * dt;
+      this.yawTarget += this.spinDir * c.steerSpeed * (this._steerMul ?? 1) * this.speedMul * dt;
     } else {
       this.yawTarget += c.idleYawSpeed * dt;
     }
@@ -2160,7 +2548,11 @@ const { OutputPass } = __require("vendor/three-addons/postprocessing/OutputPass.
 const { RoomEnvironment } = __require("vendor/three-addons/environments/RoomEnvironment.js");
 
 const { CONFIG } = __require("js/config.js");
-const { buildTreeLayout } = __require("js/layout.js");
+const { buildTreeLayout, sampleShell } = __require("js/layout.js");
+const { heartPoints } = __require("js/heart.js");
+const { ZODIAC, zodiacIndexOf } = __require("js/zodiac.js");
+const { VORTEX, createRiseVortex, vortexPoint, vortexAlpha, vortexDone } = __require("js/vortex.js");
+const { HEART_DISSOLVE, createHeartDissolve, dissolveOffset, dissolveAlpha, dissolveSize, dissolveDarken, smoothstep: dissolveSmooth } = __require("js/heart-dissolve.js");
 const { createRibbon } = __require("js/ribbon.js");
 const { giftShape, bowShape, placeShape } = __require("js/ornament-shapes.js");
 const { placeOrnaments, makeScatterPoint } = __require("js/ornament-math.js");
@@ -2405,6 +2797,9 @@ class HoloTree {
   _initTextPoints() {
     // 文字用高密度粒子：树身只有 1600 颗，铺字不够密
     const n = this.cfg.particles.count >= 1500 ? 14000 : 9000;
+    this.textKind = 'text';      // 'text' | 'heart'
+    this.heartState = null;
+    this._heartT = 0;
     this.textCount = n;
     this.textPhase = 'idle';
     this.textT = 0;
@@ -2444,6 +2839,165 @@ class HoloTree {
     this.textPoints.visible = false;
     this.textPoints.frustumCulled = false;
     this.scene.add(this.textPoints);
+
+    this._initHeartDissolve();
+    this._initVortex();
+  }
+
+  /**
+   * 收尾漩涡：一段从画面下方转上来的粒子，作为「散开 → 聚拢」之间的过渡。
+   * 和主场景一样挂在 scene 下（不跟 treeRoot 转），用加色混合 + 径向贴图。
+   */
+  _initVortex() {
+    const n = this.cfg.vortex?.count ?? VORTEX.count;
+    this._vortexN = n;
+    this.vortexField = createRiseVortex(n, {
+      ...VORTEX,
+      ...this.cfg.vortex,
+      floorY: this.cfg.particles.floorY,
+    });
+    this._vortexPos = new Float32Array(n * 3);
+    this._vortexCol = new Float32Array(n * 3);
+    this._vortexT = 0;
+    this._vortexOn = false;
+
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.BufferAttribute(this._vortexPos, 3));
+    geo.setAttribute('color', new THREE.BufferAttribute(this._vortexCol, 3));
+    geo.boundingSphere = new THREE.Sphere(new THREE.Vector3(), 200);
+
+    const mat = new THREE.PointsMaterial({
+      size: 0.16,
+      map: radialTexture('rgba(255,246,220,1)', 'rgba(255,180,80,0.35)', 128),
+      transparent: true,
+      depthWrite: false,
+      blending: THREE.AdditiveBlending,
+      vertexColors: true,
+      toneMapped: false,
+      sizeAttenuation: true,
+    });
+
+    this.vortexPoints = new THREE.Points(geo, mat);
+    this.vortexPoints.visible = false;
+    this.vortexPoints.frustumCulled = false;
+    this.scene.add(this.vortexPoints);
+  }
+
+  /** 开始播放收尾漩涡 */
+  startVortex() {
+    this._vortexT = 0;
+    this._vortexOn = true;
+    this.vortexPoints.visible = true;
+  }
+
+  _updateVortex(dt) {
+    if (!this._vortexOn) return;
+    this._vortexT += dt;
+    const t = this._vortexT;
+    const f = this.vortexField;
+    const pos = this._vortexPos;
+    const col = this._vortexCol;
+    const out = this._vortexTmp || (this._vortexTmp = new Float32Array(3));
+
+    for (let i = 0; i < this._vortexN; i++) {
+      const i3 = i * 3;
+      const on = vortexPoint(f, i, t, out);
+      const a = on ? vortexAlpha(f, i, t) : 0;
+      if (!on) {
+        pos[i3] = 0;
+        pos[i3 + 1] = -999;
+        pos[i3 + 2] = 0;
+        col[i3] = col[i3 + 1] = col[i3 + 2] = 0;
+        continue;
+      }
+      pos[i3] = out[0];
+      pos[i3 + 1] = out[1];
+      pos[i3 + 2] = out[2];
+      const b = a * (0.85 + f.size[i] * 0.3);
+      col[i3] = 1.0 * b;
+      col[i3 + 1] = 0.78 * b;
+      col[i3 + 2] = 0.42 * b;
+    }
+
+    this.vortexPoints.geometry.attributes.position.needsUpdate = true;
+    this.vortexPoints.geometry.attributes.color.needsUpdate = true;
+
+    if (vortexDone(t, f.cfg)) {
+      this._vortexOn = false;
+      this.vortexPoints.visible = false;
+    }
+  }
+
+  /**
+   * 文字 / 爱心消散的专用渲染层：3 倍顶点（本体 + 2 个鬼影），
+   * 每颗粒子独立颜色 / 透明度 / 尺寸，所以能做出「丝带拉丝」和「化尘」。
+   *
+   * 为什么不用 PointsMaterial：它只支持全局 size 和 opacity，
+   * 做不到「边缘先暗、中心后暗」「远的更小」「余烬单独闪烁」。
+   */
+  _initHeartDissolve() {
+    const n = this.textCount;
+    const verts = n * 3;
+    this._heartVerts = verts;
+    this._heartPos = new Float32Array(verts * 3);
+    this._heartCol = new Float32Array(verts * 3);
+    this._heartAlpha = new Float32Array(verts);
+    this._heartSize = new Float32Array(verts);
+    this._off = [new Float32Array(3), new Float32Array(3), new Float32Array(3)];
+    this._offGhost = [new Float32Array(3), new Float32Array(3)];
+
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.BufferAttribute(this._heartPos, 3));
+    geo.setAttribute('aColor', new THREE.BufferAttribute(this._heartCol, 3));
+    geo.setAttribute('aAlpha', new THREE.BufferAttribute(this._heartAlpha, 1));
+    geo.setAttribute('aSize', new THREE.BufferAttribute(this._heartSize, 1));
+    geo.boundingSphere = new THREE.Sphere(new THREE.Vector3(), 400);
+
+    const mat = new THREE.ShaderMaterial({
+      uniforms: {
+        uMap: { value: radialTexture('rgba(255,246,220,1)', 'rgba(255,150,70,0.38)', 128) },
+        uScale: { value: 600 },
+        uPixelRatio: { value: this.renderer.getPixelRatio() },
+      },
+      vertexShader: `
+        attribute vec3 aColor;
+        attribute float aAlpha;
+        attribute float aSize;
+        uniform float uScale;
+        uniform float uPixelRatio;
+        varying vec3 vColor;
+        varying float vAlpha;
+        void main() {
+          vColor = aColor;
+          vAlpha = aAlpha;
+          vec4 mv = modelViewMatrix * vec4(position, 1.0);
+          gl_PointSize = max(1.0, aSize * uPixelRatio * (uScale / -mv.z));
+          gl_Position = projectionMatrix * mv;
+        }
+      `,
+      fragmentShader: `
+        uniform sampler2D uMap;
+        varying vec3 vColor;
+        varying float vAlpha;
+        void main() {
+          vec4 tex = texture2D(uMap, gl_PointCoord);
+          gl_FragColor = vec4(vColor, tex.a * vAlpha);
+        }
+      `,
+      transparent: true,
+      depthWrite: false,
+      blending: THREE.AdditiveBlending,
+      toneMapped: false,
+    });
+
+    const size = this.renderer.getSize(new THREE.Vector2());
+    mat.uniforms.uScale.value = size.y * 0.5;
+
+    this.heartMaterial = mat;
+    this.heartPoints = new THREE.Points(geo, mat);
+    this.heartPoints.visible = false;
+    this.heartPoints.frustumCulled = false;
+    this.scene.add(this.heartPoints);
   }
 
   /** 环绕光带：挂在 treeRoot 下，这样手势转向时会跟着一起转 */
@@ -2461,6 +3015,10 @@ class HoloTree {
 
     this._ribbonOpacity = 1; // 散开态时淡出
     this._camBlend = null;   // 开场交棒时的机位过渡
+
+    // 接回流程锁：散开 → 聚合 这段不接受任何用户输入
+    this.restoring = false;
+    this._restoreDoneAt = 0;
   }
 
   /**
@@ -3080,7 +3638,119 @@ class HoloTree {
         }
       }
     }
+    this.textKind = 'text';
+    const ok = this._morphToPoints(pts, minX, minY, maxX, maxY);
+    if (ok) this._prepareDissolve();   // 文字和爱心共用同一套消散数据
+    return ok;
+  }
+
+  /**
+   * 爱心：手势「1」单独保持一段时间触发。
+   * 和文字走同一条变形管线，只是把字形采样换成心形采样，
+   * 所以「树散开 → 粒子飞入爱心 → 再飞散回树」的手感和文字完全一致。
+   */
+  showHeart() {
+    const h = heartPoints(2600);
+    const ok = this._morphToPoints(h.pts, h.minX, h.minY, h.maxX, h.maxY);
+    if (!ok) return false;
+    this.textKind = 'heart';
+    this._prepareDissolve();
+    return true;
+  }
+
+  /** 把平面坐标、分组、速度种子等都算好（文字 / 爱心通用），消散时直接用 */
+  _prepareDissolve() {
+    const n = this.textCount;
+    const b = this._morphBasis;
+    if (!b) return;
+    const u = new Float32Array(n);
+    const v = new Float32Array(n);
+    const tmp = new THREE.Vector3();
+    let maxR = 0;
+    for (let i = 0; i < n; i++) {
+      const i3 = i * 3;
+      tmp.set(
+        this.textGoal[i3] - b.centre.x,
+        this.textGoal[i3 + 1] - b.centre.y,
+        this.textGoal[i3 + 2] - b.centre.z,
+      );
+      const ux = tmp.dot(b.right);
+      const uy = tmp.dot(b.up);
+      u[i] = ux;
+      v[i] = uy;
+      const r = Math.hypot(ux, uy);
+      if (r > maxR) maxR = r;
+    }
+    this._heartMaxR = maxR || 1;
+    this._heartCfg = null;
+    this.heartState = createHeartDissolve(n, u, v, this._heartMaxR, Math.random);
+  }
+
+  /**
+   * 生肖：手势「2」停住触发。只认十二生肖（`zodiac.js`），
+   * 形状用 emoji 字形取 alpha 采样，取不到再退回汉字字形。
+   */
+  showZodiac(rawText) {
+    const idx = zodiacIndexOf(rawText);
+    if (idx < 0) return false;
+    const sampled = this._sampleGlyph(ZODIAC[idx].emoji, ZODIAC[idx].name);
+    if (!sampled) return false;
+    this.textKind = 'zodiac';
+    const ok = this._morphToPoints(sampled.pts, sampled.minX, sampled.minY, sampled.maxX, sampled.maxY);
+    if (ok) this._prepareDissolve();
+    return ok;
+  }
+
+  /** 把 emoji / 汉字画到 canvas 上取 alpha 采样 */
+  _sampleGlyph(emoji, fallbackChar) {
+    const S = 512;
+    const c = document.createElement('canvas');
+    c.width = c.height = S;
+    const ctx = c.getContext('2d');
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillStyle = '#fff';
+
+    const sample = () => {
+      const img = ctx.getImageData(0, 0, S, S).data;
+      const pts = [];
+      let minX = S;
+      let minY = S;
+      let maxX = 0;
+      let maxY = 0;
+      for (let y = 0; y < S; y += 2) {
+        for (let x = 0; x < S; x += 2) {
+          if (img[(y * S + x) * 4 + 3] > 120) {
+            pts.push(x, y);
+            if (x < minX) minX = x;
+            if (x > maxX) maxX = x;
+            if (y < minY) minY = y;
+            if (y > maxY) maxY = y;
+          }
+        }
+      }
+      return pts.length >= 40 ? { pts, minX, minY, maxX, maxY } : null;
+    };
+
+    // 先试 emoji（彩色字也能取 alpha，取到的是轮廓剪影）
+    ctx.font = `380px "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", "Android Emoji", sans-serif`;
+    ctx.fillText(emoji, S / 2, S / 2);
+    let out = sample();
+    if (out) return out;
+
+    // 有些系统没有 emoji 字体：退回汉字
+    ctx.clearRect(0, 0, S, S);
+    ctx.font = `400px "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif`;
+    ctx.fillText(fallbackChar, S / 2, S / 2);
+    out = sample();
+    return out;
+  }
+
+  /** 把一组采样点铺到镜头前的平面上（文字 / 爱心共用） */
+  _morphToPoints(pts, minX, minY, maxX, maxY) {
     if (pts.length < 20) return false;
+    if (this.textPhase === 'dissolve') this._finishDissolve();
+    this._regatherAt = 0;   // 新的变形打断「收拢」计划
 
     const inkW = Math.max(1, maxX - minX);
     const inkH = Math.max(1, maxY - minY);
@@ -3103,26 +3773,30 @@ class HoloTree {
     const centre = this.camera.position.clone().addScaledVector(fwd, dist);
     centre.y -= visH * 0.02;
 
-    // 散开球壳：和正常散开同一片区域
-    const { floorY, height, radius } = this.cfg.particles;
-    const cloud = new THREE.Vector3(0, floorY + height * 0.5, 0);
-    this.treeRoot.localToWorld(cloud);
+    // 散开球壳：直接复用树身粒子的散开目标点。
+    // 之前这里另起一坨随机球壳，文字和树身是「两片云」；
+    // 复用之后两边落在同一批点上，出现/消散看起来就是同一次散开。
+    const treeN = Math.max(1, this.cfg.particles.count);
+    this.treeRoot.updateMatrixWorld();
+    const shellWorld = new Float32Array(treeN * 3);
+    const tmpWorld = new THREE.Vector3();
+    for (let i = 0; i < treeN; i++) {
+      const i3 = i * 3;
+      tmpWorld.set(this.scatterTarget[i3], this.scatterTarget[i3 + 1], this.scatterTarget[i3 + 2]);
+      this.treeRoot.localToWorld(tmpWorld);
+      shellWorld[i3] = tmpWorld.x;
+      shellWorld[i3 + 1] = tmpWorld.y;
+      shellWorld[i3 + 2] = tmpWorld.z;
+    }
 
     const n = this.textCount;
     const goal = this.textGoal;
-    const from = this.textFrom;
-    const to = this.textTo;
     const nPts = pts.length / 2;
     const tmp = new THREE.Vector3();
 
-    const cloudPoint = (out, i3) => {
-      const a = Math.random() * Math.PI * 2;
-      const b = Math.acos(2 * Math.random() - 1);
-      const r = radius * (1.6 + Math.random() * 1.6);
-      out[i3] = cloud.x + Math.sin(b) * Math.cos(a) * r;
-      out[i3 + 1] = cloud.y + Math.cos(b) * r * 0.7;
-      out[i3 + 2] = cloud.z + Math.sin(b) * Math.sin(a) * r;
-    };
+    // 出现/消散的起点和终点都从树身粒子的散开目标里取 —— 两边同一片云
+    const shellFrom = sampleShell(shellWorld, n);
+    const shellTo = sampleShell(shellWorld, n);
 
     for (let i = 0; i < n; i++) {
       const i3 = i * 3;
@@ -3135,15 +3809,22 @@ class HoloTree {
       goal[i3] = tmp.x;
       goal[i3 + 1] = tmp.y;
       goal[i3 + 2] = tmp.z;
-      cloudPoint(from, i3);
-      cloudPoint(to, i3);
-      this.textPos[i3] = from[i3];
-      this.textPos[i3 + 1] = from[i3 + 1];
-      this.textPos[i3 + 2] = from[i3 + 2];
     }
+    this.textFrom.set(shellFrom);
+    this.textTo.set(shellTo);
+    this.textPos.set(shellFrom);
     this.textGeometry.attributes.position.needsUpdate = true;
     this.textPoints.visible = true;
-    this.textPoints.material.opacity = 1;
+    this.textPoints.material.opacity = 0;   // 从 0 淡入，避免「啪」一下出现
+
+    this._morphBasis = {
+      centre: centre.clone(),
+      right: right.clone(),
+      up: up.clone(),
+      fwd: fwd.clone(),
+      visW,
+      visH,
+    };
 
     this.textPhase = 'in';
     this.textT = 0;
@@ -3173,6 +3854,7 @@ class HoloTree {
         arr[i3 + 2] = this.textFrom[i3 + 2] + (this.textGoal[i3 + 2] - this.textFrom[i3 + 2]) * e;
       }
       this.textGeometry.attributes.position.needsUpdate = true;
+      this.textPoints.material.opacity = Math.min(1, this.textT / 0.18);
       if (p >= 1) this.textPhase = 'hold';
       return;
     }
@@ -3187,13 +3869,14 @@ class HoloTree {
         arr[i3 + 2] = this.textGoal[i3 + 2] + (this.textTo[i3 + 2] - this.textGoal[i3 + 2]) * e;
       }
       this.textGeometry.attributes.position.needsUpdate = true;
-      this.textPoints.material.opacity = 1 - p * p;
+      // 前半程保持全亮（就是散开的样子），最后 55% 才淡出，
+      // 免得字还没飞出去就先「化」没了
+      const fade = Math.max(0, (p - 0.45) / 0.55);
+      this.textPoints.material.opacity = 1 - fade * fade * (3 - 2 * fade);
       if (p >= 1) {
         this.textPhase = 'idle';
         this.textPoints.visible = false;
-        this.decor.visible = true;
-        if (this.ornamentMesh) this.ornamentMesh.visible = true;
-        if (this.star) this.star.visible = true;
+        this._revealScatterThenRegather();
       }
     }
   }
@@ -3202,10 +3885,205 @@ class HoloTree {
   hideText() {
     if (!this.textActive) return;
     this.textActive = false;
-    this.mode = MODE.TREE;
-    this._treeOpacityTarget = 1;
+    this.restoring = true;      // 从收到终止指令这一刻起，用户输入全部让路
+
+    // 文字和爱心都走 3.2 秒的「丝带分流」消散。
+    // 这段时间里树先停在散开态但保持透明 —— 消散完先露出散开的树，再收拢。
+    if (this.heartState) {
+      this.mode = MODE.SCATTER;
+      this._treeOpacityTarget = 0;
+      this._startDissolve();
+      return;
+    }
+
+    this.mode = MODE.SCATTER;       // 文字消散期间树先停在散开态但透明
+    this._treeOpacityTarget = 0;
     this.textPhase = 'out';
     this.textT = 0;
+  }
+
+  /** 开始消散：把当前字形位置原样搬进消散系统，做到无缝衔接 */
+  _startDissolve() {
+    const n = this.textCount;
+    const pos = this._heartPos;
+    const col = this._heartCol;
+    const alpha = this._heartAlpha;
+    const size = this._heartSize;
+
+    for (let i = 0; i < n; i++) {
+      const i3 = i * 3;
+      for (let g = 0; g < 3; g++) {
+        const v = i * 3 + g;
+        const v3 = v * 3;
+        pos[v3] = this.textPos[i3];
+        pos[v3 + 1] = this.textPos[i3 + 1];
+        pos[v3 + 2] = this.textPos[i3 + 2];
+        col[v3] = 1;
+        col[v3 + 1] = 0.72;
+        col[v3 + 2] = 0.38;
+        alpha[v] = 1;
+        size[v] = 0.045;
+      }
+    }
+    this._heartT = 0;
+    this.textPhase = 'dissolve';
+    this.textPoints.visible = false;
+    this.heartPoints.visible = true;
+    this._heartGeoDirty = true;
+  }
+
+  /**
+   * 四拍消散（文字 / 爱心共用）：内收 → 起丝 → 分流 → 化尘。
+   * 每帧算三份位置：本体 + 两个「鬼影」（-0.06s / -0.12s），
+   * 鬼影靠加色混合叠成拉丝，不用后处理。
+   */
+  _updateDissolve(dt) {
+    const st = this.heartState;
+    const b = this._morphBasis;
+    if (!st || !b) return;
+
+    this._heartT += dt;
+    const t = this._heartT;
+
+    const n = this.textCount;
+    const pos = this._heartPos;
+    const col = this._heartCol;
+    const alpha = this._heartAlpha;
+    const sizeArr = this._heartSize;
+
+    // 位移距离按爱心自身半径算：太小轮廓散不掉，太大直接飞出画面
+    const spread = (this._heartMaxR || 4) * 2.6;
+    const cfg = this._heartCfg || (this._heartCfg = { ...HEART_DISSOLVE, maxSpread: spread });
+
+    const contract = 1 - HEART_DISSOLVE.contract * dissolveSmooth(t / 0.35);
+    const sizeMul = dissolveSize(t);
+    const darken = dissolveDarken(t);
+
+    // 暖橙 → 暗褐
+    const warm = [1.0, 0.72, 0.38];
+    const brown = [0.30, 0.16, 0.09];
+
+    // 移动端粒子数减半；组数和错峰时间不动，否则丝带会断成碎点
+    const stride = this.cfg.particles.count >= 1500 ? 1 : 2;
+
+    const off = this._off[0];
+    const ghost1 = this._off[1];
+    const ghost2 = this._off[2];
+    const c = b.centre;
+    const rx = b.right.x;
+    const ry = b.right.y;
+    const rz = b.right.z;
+    const ux = b.up.x;
+    const uy = b.up.y;
+    const uz = b.up.z;
+    const fx = b.fwd?.x ?? 0;
+    const fy = b.fwd?.y ?? 0;
+    const fz = b.fwd?.z ?? 0;
+
+    for (let i = 0; i < n; i++) {
+      if (stride > 1 && i % stride === 1) {
+        // 被减掉的那一半：尺寸归零，不参与绘制
+        for (let g = 0; g < 3; g++) sizeArr[i * 3 + g] = 0;
+        continue;
+      }
+
+      const a = dissolveAlpha(st.edge[i], t);
+      const ember = st.ember[i] === 1;
+
+      let r = warm[0] + (brown[0] - warm[0]) * darken;
+      let g = warm[1] + (brown[1] - warm[1]) * darken;
+      let bl = warm[2] + (brown[2] - warm[2]) * darken;
+
+      let aMain = a;
+      if (ember && t > 1.6) {
+        // 余烬：不掉到全黑，带一点不规则闪烁
+        const flick = 0.72 + 0.28 * Math.sin(t * 9.3 + st.phase[i] * 3.1);
+        aMain = Math.max(a, 0.32 * flick);
+        r = Math.min(1, r + 0.5 * flick);
+        g = Math.min(1, g + 0.28 * flick);
+        bl = Math.min(1, bl + 0.08 * flick);
+      }
+
+      // 本体
+      dissolveOffset(st, i, t, off, cfg);
+      const px = st.u[i] * contract + off[0];
+      const py = st.v[i] * contract + off[1];
+      let v3 = i * 9;
+      pos[v3] = c.x + rx * px + ux * py + fx * off[2];
+      pos[v3 + 1] = c.y + ry * px + uy * py + fy * off[2];
+      pos[v3 + 2] = c.z + rz * px + uz * py + fz * off[2];
+      col[v3] = r; col[v3 + 1] = g; col[v3 + 2] = bl;
+      alpha[i * 3] = aMain;
+      sizeArr[i * 3] = 0.045 * sizeMul;
+
+      // 鬼影 1 / 2：同一轨道上早 0.06s / 0.12s 的位置
+      for (let gI = 0; gI < 2; gI++) {
+        const back = gI === 0 ? 0.06 : 0.12;
+        const tBack = t - back;
+        const v = i * 3 + gI + 1;
+        const vv = v * 3;
+        if (tBack <= HEART_DISSOLVE.startAt + st.delay[i]) {
+          pos[vv] = pos[v3];
+          pos[vv + 1] = pos[v3 + 1];
+          pos[vv + 2] = pos[v3 + 2];
+          col[vv] = r; col[vv + 1] = g; col[vv + 2] = bl;
+          alpha[v] = 0;
+          sizeArr[v] = 0;
+          continue;
+        }
+        const gg = gI === 0 ? ghost1 : ghost2;
+        dissolveOffset(st, i, tBack, gg, cfg);
+        const gx = st.u[i] * contract + gg[0];
+        const gy = st.v[i] * contract + gg[1];
+        pos[vv] = c.x + rx * gx + ux * gy + fx * gg[2];
+        pos[vv + 1] = c.y + ry * gx + uy * gy + fy * gg[2];
+        pos[vv + 2] = c.z + rz * gx + uz * gy + fz * gg[2];
+        col[vv] = r; col[vv + 1] = g; col[vv + 2] = bl;
+        alpha[v] = aMain * (gI === 0 ? 0.55 : 0.28);
+        sizeArr[v] = 0.045 * sizeMul;
+      }
+    }
+
+    this.heartPoints.geometry.attributes.position.needsUpdate = true;
+    this.heartPoints.geometry.attributes.aColor.needsUpdate = true;
+    this.heartPoints.geometry.attributes.aAlpha.needsUpdate = true;
+    this.heartPoints.geometry.attributes.aSize.needsUpdate = true;
+
+    if (t >= HEART_DISSOLVE.total) this._finishDissolve();
+  }
+
+  _finishDissolve() {
+    this.textPhase = 'idle';
+    this.heartPoints.visible = false;
+    this.textPoints.visible = false;
+    this._revealScatterThenRegather();
+  }
+
+  /**
+   * 文字 / 爱心消散完的统一收尾：
+   * 先让「散开态」的树淡入（粒子本来就停在散开云里），停 1.5 秒，
+   * 再切回合拢态收成树。装饰和星星等收拢时再回来。
+   */
+  _revealScatterThenRegather() {
+    this.mode = MODE.SCATTER;
+    this._treeOpacityTarget = 1;
+    // 这一刻粒子其实还停在散开云里、而且是透明的。
+    // 先把它们瞬间放回「树的合拢位置」（看不见的时候做，不会穿帮），
+    // 再切到散开态 —— 这样看到的就是一次完整的「树炸开 → 再收回」，和平时张开手掌一样。
+    this.pos.set(this.treeTarget);
+    this._regatherAt = this.time + 1.5;
+    this.startVortex();   // 散开态露脸的同时，漩涡从下方转上来，收拢时正好接住
+  }
+
+  /** 消散之后：散开态 → 收拢成树 */
+  _regatherTree(rig) {
+    this._regatherAt = 0;
+    this.mode = MODE.TREE;
+    this._restoreDoneAt = this.time + 1.2;   // 收拢大约 0.8s，留一点余量再解锁
+    rig?.setMode?.(MODE.TREE);
+    this.decor.visible = true;
+    if (this.ornamentMesh) this.ornamentMesh.visible = true;
+    if (this.star) this.star.visible = true;
   }
 
   /** 从开场机位平滑过渡到交互机位（from: {z,y,targetY,fov}） */
@@ -3251,6 +4129,12 @@ class HoloTree {
     this.time += dt;
     const t = this.time;
 
+    if (this._regatherAt && this.time >= this._regatherAt) this._regatherTree(rig);
+    if (this._restoreDoneAt && this.time >= this._restoreDoneAt) {
+      this._restoreDoneAt = 0;
+      this.restoring = false;   // 树已恢复，交还控制权
+    }
+
     // 相机：绕树转由 treeRoot 承担，所以相机只沿 z 推拉，保持构图稳定
     // 文字形态期间冻结机位，保证文字一直正对屏幕
     if (!this.textActive) {
@@ -3293,7 +4177,9 @@ class HoloTree {
       pmat.opacity = op;
       pmat.depthWrite = op > 0.995;
     }
-    this._updateTextPoints(dt);
+    this._updateVortex(dt);
+    if (this.textPhase === 'dissolve') this._updateDissolve(dt);
+    else this._updateTextPoints(dt);
 
     // 装饰球/照片：轻微上下浮动 + 缓慢自转
     this.decor.rotation.y += dt * 0.12;
@@ -3397,6 +4283,10 @@ class HoloTree {
     this.camera.updateProjectionMatrix();
     this.renderer.setSize(w, h);
     this.composer.setSize(w, h);
+    if (this.heartMaterial) {
+      this.heartMaterial.uniforms.uScale.value = h * 0.5;
+      this.heartMaterial.uniforms.uPixelRatio.value = this.renderer.getPixelRatio();
+    }
   }
 
   dispose() {
@@ -4013,11 +4903,12 @@ class IntroSequence {
 
       // --- 星尘：预存「单位矢量 × 半径」，每帧只做一次全局旋转 ---
       const dAng = Math.random() * Math.PI * 2;
-      const dR = baseRadius * (1.9 + Math.pow(Math.random(), 0.65) * 2.4);
+      // 盘中间留洞：内半径 1.35，外半径 4.3（视频里那个"黑洞"）
+      const dR = baseRadius * (1.35 + Math.pow(Math.random(), 0.6) * 2.95);
       this.dustX[i] = Math.cos(dAng) * dR;
       this.dustZ[i] = Math.sin(dAng) * dR;
       this.dustY[i] = (Math.random() - 0.5) * height * 0.09;
-      rims[i] = Math.min(1, dR / (baseRadius * 4.3));
+      rims[i] = Math.min(1, Math.max(0, (dR - baseRadius * 1.2) / (baseRadius * 3.1)));
 
       // --- 爆散方向（略偏镜头） ---
       const a = Math.random() * Math.PI * 2;
@@ -4094,11 +4985,10 @@ class IntroSequence {
     const g = ctx.createRadialGradient(cx, cx, 0, cx, cx, cx);
     g.addColorStop(0.00, 'rgba(255,220,150,0)');
     g.addColorStop(0.36, 'rgba(255,220,150,0)');
-    g.addColorStop(0.43, 'rgba(255,226,170,0.30)');   // 内沿，勾出"洞"
-    g.addColorStop(0.50, 'rgba(255,226,170,0.05)');
-    g.addColorStop(0.84, 'rgba(255,214,140,0)');
-    g.addColorStop(0.92, 'rgba(255,236,190,0.95)');   // 外沿，主圆
-    g.addColorStop(0.965, 'rgba(255,205,120,0.30)');
+    g.addColorStop(0.30, 'rgba(255,226,170,0.55)');   // 洞的边缘
+    g.addColorStop(0.36, 'rgba(255,226,170,0.10)');
+    g.addColorStop(0.80, 'rgba(255,214,140,0)');
+    g.addColorStop(0.94, 'rgba(255,236,190,0.45)');   // 外沿做软，边缘交给粒子自己定义
     g.addColorStop(1.00, 'rgba(255,205,120,0)');
     ctx.fillStyle = g;
     ctx.beginPath();
@@ -4122,6 +5012,36 @@ class IntroSequence {
     this.guide.rotation.x = -Math.PI / 2 + DUST_TILT_TARGET;
     this.guide.scale.setScalar(this.dustFit || 1);
     this.world.add(this.guide);
+
+    // 洞里的亮核：视频里那颗过曝的白点
+    const cs = 256;
+    const cv = document.createElement('canvas');
+    cv.width = cv.height = cs;
+    const cctx = cv.getContext('2d');
+    const cg = cctx.createRadialGradient(cs / 2, cs / 2, 0, cs / 2, cs / 2, cs / 2);
+    cg.addColorStop(0.0, 'rgba(255,255,255,1)');
+    cg.addColorStop(0.22, 'rgba(255,244,214,0.92)');
+    cg.addColorStop(0.5, 'rgba(255,206,130,0.35)');
+    cg.addColorStop(1.0, 'rgba(0,0,0,0)');
+    cctx.fillStyle = cg;
+    cctx.fillRect(0, 0, cs, cs);
+    const ctex = new THREE.CanvasTexture(cv);
+    ctex.colorSpace = THREE.SRGBColorSpace;
+
+    this.coreSprite = new THREE.Sprite(
+      new THREE.SpriteMaterial({
+        map: ctex,
+        transparent: true,
+        opacity: 0,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false,
+        depthTest: false,
+        toneMapped: false,
+      }),
+    );
+    this.coreSprite.renderOrder = 3;
+    this.coreSprite.scale.setScalar((this.dustFit || 1) * 0.46);
+    this.world.add(this.coreSprite);
   }
 
   _buildFireworks() {
@@ -4327,7 +5247,15 @@ class IntroSequence {
       sizeScale = 1 + 0.2 * rimK;
       this._guideOpen = open;
       this._guideScale = this.dustFit * shrink;
+
+      // 亮核：随圆环张开一起亮，收环时收掉
+      if (this.coreSprite) {
+        const on = clamp01((t - 0.55) / 0.6) * (1 - clamp01((t - 2.35) / 0.5));
+        this.coreSprite.material.opacity = 0.95 * on;
+        this.coreSprite.scale.setScalar((this.dustFit || 1) * (0.44 + 0.04 * on));
+      }
     } else if (t < T.riseEnd) {
+      if (this.coreSprite) this.coreSprite.material.opacity = 0;
       // B. 螺旋垒树：按高度分配延迟 + 全局额外旋转
       const p = shiftProgress(t, T.gatherEnd, T.riseEnd);
       const extra = (1 - easeOutCubic(p)) * Math.PI * 2;
@@ -59091,6 +60019,31 @@ function buildTreeLayout(count, shape, rng = Math.random) {
   return { tree, scatter, seed, size };
 }
 
+/**
+ * 从散开球壳里取 n 个落点（每个轴带 jitter 抖动）。
+ *
+ * 文字粒子有上万颗、树身只有一千多颗，如果各自随机生成球壳，
+ * 两片云的位置和密度都不一样，看起来就是「两拨粒子在飞」。
+ * 让文字粒子从树身粒子的散开目标里取点，出现和消散才和正常散开是同一片云。
+ *
+ * @param {Float32Array} shell 散开目标点（已经转换到同一坐标系）
+ * @param {number} n 取样数量
+ * @param {number} jitter 每个轴的抖动幅度
+ * @param {() => number} rng 可复现的随机源
+ */
+function sampleShell(shell, n, jitter = 1.1, rng = Math.random) {
+  const out = new Float32Array(n * 3);
+  const m = Math.max(1, shell.length / 3);
+  for (let i = 0; i < n; i++) {
+    const k = ((rng() * m) | 0) * 3;
+    const i3 = i * 3;
+    out[i3] = shell[k] + (rng() - 0.5) * jitter;
+    out[i3 + 1] = shell[k + 1] + (rng() - 0.5) * jitter;
+    out[i3 + 2] = shell[k + 2] + (rng() - 0.5) * jitter;
+  }
+  return out;
+}
+
 /** 散开态下粒子离原点的平均距离，用于断言"确实是散开的" */
 function meanRadius(positions) {
   let sum = 0;
@@ -59129,8 +60082,491 @@ function radiusProfile(positions, bands = 5) {
 }
 
 __exports["buildTreeLayout"] = buildTreeLayout;
+__exports["sampleShell"] = sampleShell;
 __exports["meanRadius"] = meanRadius;
 __exports["radiusProfile"] = radiusProfile;
+  };
+  __defs["js/heart.js"] = function (__require, __exports) {
+/**
+ * 心形采样：给「手势 1 → 粒子聚成爱心」用。
+ *
+ * 轮廓用经典心形参数方程
+ *   x = 16 sin³t
+ *   y = 13cos t − 5cos2t − 2cos3t − cos4t
+ * 填充不用「中心射线」，而是按扫描线切成一条条横带、在带内均匀取点 ——
+ * 这样才是实心且均匀的，不会在正中间留下一条竖着的接缝。
+ *
+ * 输出是「图像坐标系」（y 向下），能直接喂给和文字同一条变形管线。
+ */
+
+const STEPS = 512;
+const ROWS = 256;
+
+function heartOutline() {
+  const out = [];
+  for (let i = 0; i < STEPS; i++) {
+    const t = (i / STEPS) * Math.PI * 2;
+    const s = Math.sin(t);
+    const x = 16 * s * s * s;
+    const y = 13 * Math.cos(t) - 5 * Math.cos(2 * t) - 2 * Math.cos(3 * t) - Math.cos(4 * t);
+    out.push(x, y);
+  }
+  return out;
+}
+
+/**
+ * @param {number} count 采样点数量
+ * @param {() => number} rng 可复现的随机源
+ */
+function heartPoints(count = 4000, rng = Math.random) {
+  const outline = heartOutline();
+
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+  for (let i = 0; i < outline.length; i += 2) {
+    if (outline[i] < minX) minX = outline[i];
+    if (outline[i] > maxX) maxX = outline[i];
+    if (outline[i + 1] < minY) minY = outline[i + 1];
+    if (outline[i + 1] > maxY) maxY = outline[i + 1];
+  }
+  const span = Math.max(maxX - minX, maxY - minY) || 1;
+
+  // 扫描线：每一行的 [x0, x1] 区间（心形对任意水平线最多两段，但按通用写法收集全部交点）
+  const rows = [];
+  for (let r = 0; r < ROWS; r++) {
+    const y = minY + ((r + 0.5) / ROWS) * (maxY - minY);
+    const xs = [];
+    for (let i = 0; i < STEPS; i++) {
+      const j = (i + 1) % STEPS;
+      const y0 = outline[i * 2 + 1];
+      const y1 = outline[j * 2 + 1];
+      if ((y0 <= y && y1 > y) || (y1 <= y && y0 > y)) {
+        const x0 = outline[i * 2];
+        const x1 = outline[j * 2];
+        xs.push(x0 + ((y - y0) / (y1 - y0)) * (x1 - x0));
+      }
+    }
+    xs.sort((a, b) => a - b);
+    const spans = [];
+    for (let k = 0; k + 1 < xs.length; k += 2) {
+      const w = xs[k + 1] - xs[k];
+      if (w > 1e-6) spans.push([xs[k], w]);
+    }
+    if (!spans.length) continue;
+    const total = spans.reduce((a, s) => a + s[1], 0);
+    rows.push({ y, spans, total });
+  }
+
+  // 按行宽加权：宽的行多取点，保证密度均匀
+  const grand = rows.reduce((a, r) => a + r.total, 0) || 1;
+  const cum = [];
+  let acc = 0;
+  for (const r of rows) {
+    acc += r.total / grand;
+    cum.push(acc);
+  }
+
+  const pts = [];
+  let guard = 0;
+  while (pts.length < count * 2 && guard < count * 40) {
+    guard++;
+    const pick = rng();
+    let row = rows[rows.length - 1];
+    for (let i = 0; i < cum.length; i++) {
+      if (pick <= cum[i]) { row = rows[i]; break; }
+    }
+    let u = rng();
+    let spanPick = row.spans[row.spans.length - 1];
+    for (const sp of row.spans) {
+      const w = sp[1] / row.total;
+      if (u < w) { spanPick = sp; break; }
+      u -= w;
+    }
+    const x = spanPick[0] + rng() * spanPick[1];
+    // 归一化 + 竖向拉长一点（参数方程本身偏扁），并翻转 y 成图像坐标
+    pts.push(x / span, (-row.y / span) * 1.12);
+  }
+
+  let bx0 = Infinity;
+  let by0 = Infinity;
+  let bx1 = -Infinity;
+  let by1 = -Infinity;
+  for (let i = 0; i < pts.length; i += 2) {
+    if (pts[i] < bx0) bx0 = pts[i];
+    if (pts[i] > bx1) bx1 = pts[i];
+    if (pts[i + 1] < by0) by0 = pts[i + 1];
+    if (pts[i + 1] > by1) by1 = pts[i + 1];
+  }
+
+  return { pts, minX: bx0, minY: by0, maxX: bx1, maxY: by1, count: pts.length / 2 };
+}
+__exports["heartOutline"] = heartOutline;
+__exports["heartPoints"] = heartPoints;
+  };
+  __defs["js/zodiac.js"] = function (__require, __exports) {
+/**
+ * 十二生肖：文字 → 生肖。
+ *
+ * 只认这 12 个（及其常见别名），其他任何文字都不生效 —— 这是产品要求：
+ * 「文字定制手势」的输入范围就是十二生肖，免得用户随便写一句也能变形。
+ *
+ * 形状用 emoji 字形取 alpha 采样（跨平台都能渲染），
+ * 取不到再退回汉字字形，保证不会空手。
+ */
+
+const ZODIAC = [
+  { name: '鼠', emoji: '🐭', aliases: ['鼠', '老鼠', '子鼠', 'rat'] },
+  { name: '牛', emoji: '🐮', aliases: ['牛', '丑牛', 'ox'] },
+  { name: '虎', emoji: '🐯', aliases: ['虎', '老虎', '寅虎', 'tiger'] },
+  { name: '兔', emoji: '🐰', aliases: ['兔', '兔子', '卯兔', 'rabbit'] },
+  { name: '龙', emoji: '🐲', aliases: ['龙', '龍', '辰龙', 'dragon'] },
+  { name: '蛇', emoji: '🐍', aliases: ['蛇', '巳蛇', 'snake'] },
+  { name: '马', emoji: '🐴', aliases: ['马', '馬', '午马', 'horse'] },
+  { name: '羊', emoji: '🐐', aliases: ['羊', '山羊', '未羊', 'goat'] },
+  { name: '猴', emoji: '🐵', aliases: ['猴', '猴子', '申猴', 'monkey'] },
+  { name: '鸡', emoji: '🐔', aliases: ['鸡', '雞', '公鸡', '酉鸡', 'rooster'] },
+  { name: '狗', emoji: '🐶', aliases: ['狗', '小狗', '戌狗', 'dog'] },
+  { name: '猪', emoji: '🐷', aliases: ['猪', '豬', '亥猪', 'pig'] },
+];
+
+/** @returns {number} 命中的生肖下标；不是十二生肖就返回 -1 */
+function zodiacIndexOf(text) {
+  const raw = String(text || '').trim();
+  if (!raw) return -1;
+  // 完全相等的优先，避免「马」命中「马上」这种长句
+  for (let i = 0; i < ZODIAC.length; i++) {
+    const z = ZODIAC[i];
+    if (z.name === raw) return i;
+    if (z.aliases.some((a) => a === raw)) return i;
+  }
+  // 再退一步：包含别名（「可爱的小老虎」→ 虎），但限制长度，别让整句都算
+  if (raw.length <= 6) {
+    for (let i = 0; i < ZODIAC.length; i++) {
+      if (ZODIAC[i].aliases.some((a) => raw.includes(a))) return i;
+    }
+  }
+  return -1;
+}
+
+function zodiacName(index) {
+  return ZODIAC[index]?.name ?? '';
+}
+
+function zodiacEmoji(index) {
+  return ZODIAC[index]?.emoji ?? '';
+}
+__exports["zodiacIndexOf"] = zodiacIndexOf;
+__exports["zodiacName"] = zodiacName;
+__exports["zodiacEmoji"] = zodiacEmoji;
+__exports["ZODIAC"] = ZODIAC;
+  };
+  __defs["js/vortex.js"] = function (__require, __exports) {
+/**
+ * 「上升漩涡」：动画收尾时从画面下方转上来的一股粒子，慢慢收成树。
+ *
+ * 关键点是「不是一下子出现」：
+ *   - 每颗粒子有自己的 delay（0~0.45s），从下往上依次冒出来；
+ *   - 起点在树底以下（floorY - rise），用 0.2s 淡入；
+ *   - 上升过程中绕 Y 轴转，半径随高度收小 → 像一个漏斗被提起来。
+ *
+ * 纯数学放这里，能单测；怎么画在 tree.js。
+ */
+
+const VORTEX = Object.freeze({
+  duration: 1.6,     // 整段时长（秒）
+  floorY: -12,       // 树底（main 会按 config 覆盖）
+  rise: 14,          // 从树底再往下多少开始起
+  height: 26,        // 上升的总高度（够从底部穿到树顶）
+  radius: 9.5,       // 底部的起始半径
+  turns: 2.4,        // 整段转多少圈
+  delay: 0.45,       // 粒子之间的错峰（秒）
+  fadeIn: 0.18,      // 单颗粒子淡入
+});
+
+const TAU = Math.PI * 2;
+const clamp01 = (v) => (v < 0 ? 0 : v > 1 ? 1 : v);
+
+function createRiseVortex(n, cfg = VORTEX, rng = Math.random) {
+  const theta = new Float32Array(n);
+  const radius = new Float32Array(n);
+  const delay = new Float32Array(n);
+  const speed = new Float32Array(n);
+  const offset = new Float32Array(n);
+  const size = new Float32Array(n);
+
+  for (let i = 0; i < n; i++) {
+    theta[i] = rng() * TAU;
+    radius[i] = cfg.radius * (0.35 + rng() * 0.65);
+    delay[i] = rng() * cfg.delay;
+    speed[i] = 0.85 + rng() * 0.3;
+    offset[i] = (rng() - 0.5) * 1.2;   // 纵向抖动，别像一圈环
+    size[i] = 0.7 + rng() * 0.9;
+  }
+
+  return { n, theta, radius, delay, speed, offset, size, cfg };
+}
+
+/**
+ * 某颗粒子在时刻 t 的局部坐标。
+ * 还没轮到的粒子返回 false（调用方把尺寸设 0 即可）。
+ */
+function vortexPoint(f, i, t, out) {
+  const cfg = f.cfg;
+  const lt = t - f.delay[i];
+  if (lt <= 0) return false;
+
+  // 0..1 的上升进度（速度略有差异，快的先到顶）
+  const p = clamp01((lt / cfg.duration) * f.speed[i]);
+  const y = cfg.floorY - cfg.rise + (cfg.height + cfg.rise) * p + f.offset[i];
+
+  // 半径随高度收小：底部大、顶上细，像一个被提起来的漏斗
+  const r = f.radius[i] * (1 - 0.72 * p);
+  const a = f.theta[i] + TAU * cfg.turns * p;
+
+  out[0] = Math.cos(a) * r;
+  out[1] = y;
+  out[2] = Math.sin(a) * r;
+  return true;
+}
+
+/** 单颗粒子的不透明度：淡入 + 整体末段淡出（保证整段结束一定归零） */
+function vortexAlpha(f, i, t) {
+  const cfg = f.cfg;
+  const lt = t - f.delay[i];
+  if (lt <= 0) return 0;
+  const end = cfg.duration + cfg.delay;
+  const fadeIn = clamp01(lt / cfg.fadeIn);
+  const fadeOut = clamp01((end - t) / 0.35);
+  return Math.min(fadeIn, fadeOut);
+}
+
+/** 整段是否播完 */
+function vortexDone(t, cfg = VORTEX) {
+  return t >= cfg.duration + cfg.delay;
+}
+__exports["createRiseVortex"] = createRiseVortex;
+__exports["vortexPoint"] = vortexPoint;
+__exports["vortexAlpha"] = vortexAlpha;
+__exports["vortexDone"] = vortexDone;
+__exports["VORTEX"] = VORTEX;
+  };
+  __defs["js/heart-dissolve.js"] = function (__require, __exports) {
+/**
+ * 爱心「丝带分流」消散：纯数学，不碰 three.js，能 node 单测。
+ *
+ * 四拍（总 3.2s）：
+ *   0.00–0.35  蓄力：整体内收 3%，边缘先失亮
+ *   0.35–1.10  起丝：按轮廓角度分组错峰出发，带切向分量 → 拉出股
+ *   1.10–2.20  分流：丝带拉长拉细，上飘 + 外扩 + 正弦摆动（摆幅随距离长）
+ *   2.20–3.20  化尘：缩小、变暗、暖橙 → 暗褐，8% 余烬闪烁
+ *
+ * 关键：起点不是同一帧。每颗粒子有 groupDelay = group * 0.06s，
+ * 所以看到的是「从一侧开始抽丝，慢慢传过去」，而不是整体膨胀。
+ */
+
+const TAU = Math.PI * 2;
+
+const HEART_DISSOLVE = Object.freeze({
+  total: 3.2,
+  startAt: 0.35,       // 起丝的时刻（此前只有内收和变暗）
+  travel: 1.7,         // 单颗粒子走完全程的时长（太快会糊，太慢轮廓留太久）
+  groups: 14,          // 轮廓相位分组数（12~16）
+  strands: 4,          // 合并成几股丝带（3~4）
+  stagger: 0.06,       // 每组错峰（秒）
+  maxSpread: 0.55,     // 位移上限（相对画面短边的一半，避免铺满屏）
+  radialWeight: 0.70,     // 保留：径向分量（在极坐标里表现为 r 的增长）
+  upWeight: 0.50,         // 上飘
+  tangentWeight: 0.35,    // 切向分量（螺旋）
+  jitterWeight: 0.20,
+  expand: 1.9,            // 保留（丝带外端半径倍数）
+  swirl: 1.5,             // 丝带沿程旋转（弧度，越大越卷）
+  spreadGain: 0.30,
+  slide: 1.05,            // 粒子沿丝带滑动的距离（1 = 走完整条）
+  armGap: 0.55,           // 每股只占自己扇区的一部分 → 股与股之间留空，才数得出来
+  armJitter: 0.05,        // 沿丝带方向的抖动，打散「同速成团」
+  swayAmp: 0.16,       // 横向摆动幅值（随距离增长）
+  swayFreq: 0.6,
+  turbAmp: 0.10,       // 湍流幅值
+  turbFreq: 0.6,
+  emberRatio: 0.08,
+  contract: 0.03,      // 蓄力内收 3%
+});
+
+function easeOutCubic(x) {
+  const t = Math.min(1, Math.max(0, x));
+  const y = 1 - t;
+  return 1 - y * y * y;
+}
+
+function smoothstep(t) {
+  const x = Math.min(1, Math.max(0, t));
+  return x * x * (3 - 2 * x);
+}
+
+/** 边缘粒子：0.35s 内先降到 0.55 */
+function edgeAlpha(t) {
+  if (t <= 0) return 1;
+  if (t < 0.35) return 1 - 0.45 * (t / 0.35);
+  if (t < 1.8) return 0.55 - 0.37 * ((t - 0.35) / 1.45);
+  if (t < 3.0) return 0.18 * (1 - (t - 1.8) / 1.2);
+  return 0;
+}
+
+/** 中心粒子：0.35s 前保持全亮，之后跟着走 */
+function centerAlpha(t) {
+  if (t <= 0.35) return 1;
+  if (t < 1.8) return 1 - 0.82 * ((t - 0.35) / 1.45);
+  if (t < 3.0) return 0.18 * (1 - (t - 1.8) / 1.2);
+  return 0;
+}
+
+/** 单颗粒子的透明度：边缘先暗、中心留住轮廓 */
+function dissolveAlpha(edge, t) {
+  const e = Math.min(1, Math.max(0, edge));
+  return edgeAlpha(t) * e + centerAlpha(t) * (1 - e);
+}
+
+/** 尺寸 1.0 → 0.45（2.2s 之后才开始明显变小） */
+function dissolveSize(t) {
+  if (t < 1.1) return 1;
+  if (t < 2.6) return 1 - 0.55 * ((t - 1.1) / 1.5);
+  return 0.45;
+}
+
+/** 暖橙 → 暗褐 的进度 */
+function dissolveDarken(t) {
+  return smoothstep((t - 1.8) / 1.2);
+}
+
+/**
+ * 把「爱心平面」上的坐标 (u,v) 转成消散用的状态。
+ *
+ * @param {number} n 粒子数
+ * @param {Float32Array} u 平面 x（世界单位，相对爱心中心）
+ * @param {Float32Array} v 平面 y（向上为正）
+ * @param {number} maxR 爱心最大半径（算 edge 用）
+ * @param {() => number} rng
+ */
+function createHeartDissolve(n, u, v, maxR, rng = Math.random) {
+  const ux = new Float32Array(n);
+  const uy = new Float32Array(n);
+  const radius = new Float32Array(n);
+  const delay = new Float32Array(n);
+  const speed = new Float32Array(n);
+  const edge = new Float32Array(n);
+  const jitterX = new Float32Array(n);
+  const jitterY = new Float32Array(n);
+  const ember = new Uint8Array(n);
+  const phase = new Float32Array(n);
+  const group = new Uint8Array(n);
+  const strand = new Uint8Array(n);
+  const strandMid = new Float32Array(n);
+  const s0 = new Float32Array(n);
+  const a0 = new Float32Array(n);
+  const strandSpin = new Float32Array(n);
+
+  const R = Math.max(maxR, 1e-4);
+
+  for (let i = 0; i < n; i++) {
+    // 轮廓相位：atan2 得到角度，再切成 groups 组
+    const ang = Math.atan2(v[i], u[i]);
+    a0[i] = ang;
+    const g = Math.min(HEART_DISSOLVE.groups - 1, Math.floor(((ang + Math.PI) / TAU) * HEART_DISSOLVE.groups));
+    group[i] = g;
+    delay[i] = g * HEART_DISSOLVE.stagger;
+
+    // 丝带分组：把整圈按角度切成 strands 段，每股共用一个「束中心方向」，
+    // 否则每颗粒子各走各的径向，看起来是一圈均匀的雾，不是几股丝带。
+    const st = Math.min(HEART_DISSOLVE.strands - 1, Math.floor(((ang + Math.PI) / TAU) * HEART_DISSOLVE.strands));
+    strand[i] = st;
+    strandMid[i] = -Math.PI + ((st + 0.5) / HEART_DISSOLVE.strands) * TAU;
+    strandSpin[i] = st % 2 === 0 ? 1 : -1;
+    // 在这一股里的位置（0=弧一端的起点，1=另一端）
+    const seg = TAU / HEART_DISSOLVE.strands;
+    const rel = (ang - (strandMid[i] - seg / 2) + TAU) % TAU;
+    s0[i] = Math.min(0.999, rel / seg);
+
+    const seed = rng();
+    // 速度分层：快的先走成丝头，慢的拖在后面
+    speed[i] = 0.22 + 0.78 * seed * seed;
+
+    ux[i] = u[i];
+    uy[i] = v[i];
+    radius[i] = Math.hypot(u[i], v[i]);
+    // 半径 0..1：越靠外，越早失亮
+    edge[i] = Math.min(1, radius[i] / R);
+
+    jitterX[i] = (rng() * 2 - 1) * 0.5;
+    jitterY[i] = (rng() * 2 - 1) * 0.5;
+    ember[i] = rng() < HEART_DISSOLVE.emberRatio ? 1 : 0;
+    phase[i] = rng() * TAU;
+  }
+
+  return {
+    n, u: ux, v: uy, radius, delay, speed, edge,
+    jitterX, jitterY, ember, phase, group, strand, strandMid, strandSpin, s0, a0, maxR: R,
+  };
+}
+
+/**
+ * 求某颗粒子在时刻 t 的平面位移（不含收缩，收缩由调用方乘在基础坐标上）。
+ * 返回写进 out[0]=dx, out[1]=dy, out[2]=dz。
+ */
+function dissolveOffset(st, i, t, out, cfg = HEART_DISSOLVE) {
+  const t0 = cfg.startAt + st.delay[i];
+  const local = Math.max(0, t - t0);
+  const prog = easeOutCubic(local / cfg.travel);
+  const adv = prog * st.speed[i];          // 0..1，慢的粒子 adv 小
+
+  // 沿丝带滑动：s 从 0.15 一路走到 1（不同速度 → 前后拉开，形成长度差）
+  const slide = Math.min(1.15, st.s0[i] * 0.8 + 0.15 + adv * cfg.slide);
+
+  // 丝带：绕中心卷起来的螺旋臂
+  const seg = TAU / HEART_DISSOLVE.strands;
+  const spreadA = seg * cfg.armGap;                       // 这一股实际张开的角
+  const jitterS = (st.jitterX[i] * 0.5 + 0.5) * cfg.armJitter;
+  const slide2 = Math.min(1.2, slide + jitterS);
+  const ang = st.strandMid[i] + (st.s0[i] - 0.5) * spreadA + st.strandSpin[i] * cfg.swirl * slide2;
+  const rOut = st.maxR * (1 + cfg.expand * 0.35);
+  const r = st.maxR * 0.2 + (rOut - st.maxR * 0.2) * slide2;
+
+  const curveX = Math.cos(ang) * r;
+  const curveY = Math.sin(ang) * r * 0.96;
+
+  // 从爱心原位过渡到丝带（越快的越早上丝带）
+  const b = smoothstep(Math.min(1, adv * 1.55));
+  const baseX = st.u[i];
+  const baseY = st.v[i];
+
+  // 摆动 + 湍流（随 adv 增长，丝带才有丝绸感）
+  const sway = Math.sin(TAU * cfg.swayFreq * t + st.phase[i]) * cfg.swayAmp * cfg.maxSpread * adv;
+  const turb = cfg.turbAmp * cfg.maxSpread * adv;
+  const turbX = Math.sin(TAU * cfg.turbFreq * t + st.phase[i] * 1.7) * turb;
+  const turbY = Math.cos(TAU * cfg.turbFreq * t * 0.9 + st.phase[i] * 2.3) * turb;
+
+  const upDrift = cfg.upWeight * st.maxR * 0.9 * adv;
+
+  const x = baseX + (curveX - baseX) * b - Math.sin(ang) * sway + turbX;
+  const y = baseY + (curveY - baseY) * b + upDrift + Math.cos(ang) * sway + turbY;
+
+  out[0] = x - st.u[i];
+  out[1] = y - st.v[i];
+  out[2] = adv * 0.8;
+  return out;
+}
+
+__exports["easeOutCubic"] = easeOutCubic;
+__exports["smoothstep"] = smoothstep;
+__exports["edgeAlpha"] = edgeAlpha;
+__exports["centerAlpha"] = centerAlpha;
+__exports["dissolveAlpha"] = dissolveAlpha;
+__exports["dissolveSize"] = dissolveSize;
+__exports["dissolveDarken"] = dissolveDarken;
+__exports["createHeartDissolve"] = createHeartDissolve;
+__exports["dissolveOffset"] = dissolveOffset;
+__exports["HEART_DISSOLVE"] = HEART_DISSOLVE;
   };
   __defs["js/ribbon.js"] = function (__require, __exports) {
 /**
@@ -59802,7 +61238,8 @@ function fitDustRadius(cam, {
  * 恰好等于 sin(倾斜角)（aspect 会在 NDC 里抵消掉），所以 22° 在任何画幅
  * 上看起来都是同一个比例 —— 不需要按画幅去改。
  */
-const DUST_TILT_TARGET = (30 * Math.PI) / 180;
+// 参考视频里的圆是「正对镜头」的盘：盘面要立起来（90°），原来 30° 是躺着的椭圆
+const DUST_TILT_TARGET = (88 * Math.PI) / 180;
 
 /** 开场「张开」的起点：几乎平躺，对应参考画面 1.0s 时那条横带 */
 const DUST_OPEN_FROM = (13 * Math.PI) / 180;
