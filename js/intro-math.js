@@ -218,11 +218,11 @@ export function fitDustRadius(cam, {
 export const DUST_TILT_TARGET = (30 * Math.PI) / 180;
 
 /** 开场「张开」的起点：几乎平躺，对应参考画面 1.0s 时那条横带 */
-export const DUST_OPEN_FROM = (4 * Math.PI) / 180;
+export const DUST_OPEN_FROM = (13 * Math.PI) / 180;
 
 /** 张开的时间窗（参考画面：1.0s 还是横带，1.8s 已经是环） */
-export const DUST_OPEN_START = 0.55;
-export const DUST_OPEN_END = 1.75;
+export const DUST_OPEN_START = 0.25;
+export const DUST_OPEN_END = 1.20;
 
 /**
  * 盘面倾斜角随时间张开：横带 → 环。

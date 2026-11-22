@@ -124,6 +124,7 @@ export class HoloTree {
     this.container = container;
     this.mode = MODE.TREE;
     this.time = 0;
+    this.textActive = false;
 
     // 相框交互
     this.raycaster = new THREE.Raycaster();
@@ -137,6 +138,7 @@ export class HoloTree {
     this._initRenderer();
     this._initScene();
     this._initParticles();
+    this._initTextPoints();
     this._initRibbon();
     this._initOrnaments();
     this._initDecor();
@@ -218,6 +220,8 @@ export class HoloTree {
       metalness: 0.5,
       roughness: 0.35,
       envMapIntensity: 1.3,
+      transparent: true,   // 文字阶段需要用它淡出
+      opacity: 1,
     });
 
     this.particles = new THREE.InstancedMesh(geometry, material, count);
@@ -253,6 +257,50 @@ export class HoloTree {
 
     this.particles.instanceColor.needsUpdate = true;
     this.treeRoot.add(this.particles);
+  }
+
+  _initTextPoints() {
+    // 文字用高密度粒子：树身只有 1600 颗，铺字不够密
+    const n = this.cfg.particles.count >= 1500 ? 14000 : 9000;
+    this.textCount = n;
+    this.textPhase = 'idle';
+    this.textT = 0;
+    this.textActive = false;
+    this._treeOpacity = 1;
+    this._treeOpacityTarget = 1;
+
+    this.textPos = new Float32Array(n * 3);
+    this.textFrom = new Float32Array(n * 3);
+    this.textGoal = new Float32Array(n * 3);
+    this.textTo = new Float32Array(n * 3);
+
+    const colors = new Float32Array(n * 3);
+    for (let i = 0; i < n; i++) {
+      const t = Math.random();
+      colors[i * 3] = 1.0;
+      colors[i * 3 + 1] = 0.78 + 0.16 * t;
+      colors[i * 3 + 2] = 0.38 + 0.3 * t;
+    }
+
+    this.textGeometry = new THREE.BufferGeometry();
+    this.textGeometry.setAttribute('position', new THREE.BufferAttribute(this.textPos, 3));
+    this.textGeometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+    this.textGeometry.boundingSphere = new THREE.Sphere(new THREE.Vector3(), 200);
+
+    const mat = new THREE.PointsMaterial({
+      size: 0.045,
+      map: radialTexture('rgba(255,246,220,1)', 'rgba(255,190,90,0.35)', 128),
+      transparent: true,
+      depthWrite: false,
+      blending: THREE.AdditiveBlending,
+      vertexColors: true,
+      toneMapped: false,
+      sizeAttenuation: true,
+    });
+    this.textPoints = new THREE.Points(this.textGeometry, mat);
+    this.textPoints.visible = false;
+    this.textPoints.frustumCulled = false;
+    this.scene.add(this.textPoints);
   }
 
   /** 环绕光带：挂在 treeRoot 下，这样手势转向时会跟着一起转 */
@@ -418,6 +466,29 @@ export class HoloTree {
     photo.position.z = 0.045;
     group.add(photo);
 
+    // 照片底下的可编辑文字：一块 canvas 纹理贴在相框下方
+    const capCanvas = document.createElement('canvas');
+    capCanvas.width = 512;
+    capCanvas.height = 144;
+    const capTex = new THREE.CanvasTexture(capCanvas);
+    capTex.colorSpace = THREE.SRGBColorSpace;
+    const capMesh = new THREE.Mesh(
+      new THREE.PlaneGeometry(1.86, 0.52),
+      new THREE.MeshBasicMaterial({
+        map: capTex,
+        transparent: true,
+        toneMapped: false,
+        depthWrite: false,
+      }),
+    );
+    capMesh.position.set(0, -1.08, 0.05);
+    capMesh.visible = false;
+    group.add(capMesh);
+    group.userData.captionCanvas = capCanvas;
+    group.userData.captionTexture = capTex;
+    group.userData.captionMesh = capMesh;
+    group.userData.caption = '';
+
     const scale = 0.72 + Math.random() * 0.16;
     group.scale.setScalar(scale);
 
@@ -444,6 +515,68 @@ export class HoloTree {
     this.decor.add(group);
     this.photos.push(group);
     return group;
+  }
+
+  /** 设置照片下方的文字；空字符串 = 隐藏 */
+  setPhotoCaption(node, text) {
+    if (!node) return;
+    const canvas = node.userData.captionCanvas;
+    const tex = node.userData.captionTexture;
+    const mesh = node.userData.captionMesh;
+    if (!canvas || !tex || !mesh) return;
+
+    const value = String(text ?? '').replace(/\s+/g, ' ').trim();
+    node.userData.caption = value;
+
+    const ctx = canvas.getContext('2d');
+    const W = canvas.width;
+    const H = canvas.height;
+    ctx.clearRect(0, 0, W, H);
+    if (!value) {
+      mesh.visible = false;
+      tex.needsUpdate = true;
+      return;
+    }
+
+    ctx.font = '600 34px "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillStyle = '#ffe7bb';
+    ctx.shadowColor = 'rgba(255, 210, 140, 0.75)';
+    ctx.shadowBlur = 12;
+
+    // 按字符换行，最多 3 行；超出用省略号
+    const maxW = W - 28;
+    const maxLines = 3;
+    const lines = [];
+    let line = '';
+    let overflow = false;
+    for (const ch of value) {
+      const test = line + ch;
+      if (ctx.measureText(test).width > maxW && line) {
+        lines.push(line);
+        line = ch;
+        if (lines.length >= maxLines) { overflow = true; break; }
+      } else {
+        line = test;
+      }
+    }
+    if (line && lines.length < maxLines) lines.push(line);
+    if (overflow && lines.length) {
+      let last = lines[lines.length - 1];
+      while (last.length > 1 && ctx.measureText(last + '…').width > maxW) last = last.slice(0, -1);
+      lines[lines.length - 1] = last + '…';
+    }
+    const lh = 42;
+    const startY = H / 2 - ((lines.length - 1) * lh) / 2;
+    lines.forEach((l, i) => ctx.fillText(l, W / 2, startY + i * lh));
+
+    mesh.visible = true;
+    tex.needsUpdate = true;
+  }
+
+  photoCaption(node) {
+    return node?.userData?.caption || '';
   }
 
   /**
@@ -765,6 +898,173 @@ export class HoloTree {
     this.mode = mode;
   }
 
+  /**
+   * 粒子变形文字：用一套高密度粒子把文字铺出来。
+   * 出现：树先散开、这套粒子从同一片球壳飞入字形；
+   * 消失：字形再飞散回球壳并淡出，树同时重新聚拢。
+   * 运动和正常「散开/合拢」一致，没有贴片感。
+   */
+  showText(rawText) {
+    const text = String(rawText || '').trim() || '圣诞快乐';
+
+    const c = document.createElement('canvas');
+    c.width = 1024;
+    c.height = 512;
+    const ctx = c.getContext('2d');
+    const fontStr = (size) => `700 ${size}px "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif`;
+    let size = 280;
+    ctx.font = fontStr(size);
+    while (size > 60 && ctx.measureText(text).width > c.width * 0.92) {
+      size -= 10;
+      ctx.font = fontStr(size);
+    }
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillStyle = '#fff';
+    ctx.fillText(text, c.width / 2, c.height / 2);
+
+    const img = ctx.getImageData(0, 0, c.width, c.height).data;
+    const pts = [];
+    let minX = c.width, minY = c.height, maxX = 0, maxY = 0;
+    for (let y = 0; y < c.height; y += 2) {
+      for (let x = 0; x < c.width; x += 2) {
+        if (img[(y * c.width + x) * 4 + 3] > 140) {
+          pts.push(x, y);
+          if (x < minX) minX = x;
+          if (x > maxX) maxX = x;
+          if (y < minY) minY = y;
+          if (y > maxY) maxY = y;
+        }
+      }
+    }
+    if (pts.length < 20) return false;
+
+    const inkW = Math.max(1, maxX - minX);
+    const inkH = Math.max(1, maxY - minY);
+    const cx = minX + inkW / 2;
+    const cy = minY + inkH / 2;
+
+    this.camera.updateMatrixWorld();
+    const q = this.camera.quaternion;
+    const fwd = new THREE.Vector3(0, 0, -1).applyQuaternion(q);
+    const right = new THREE.Vector3(1, 0, 0).applyQuaternion(q);
+    const up = new THREE.Vector3(0, 1, 0).applyQuaternion(q);
+
+    const dist = 7.0;
+    const visH = 2 * dist * Math.tan((this.camera.fov * Math.PI) / 360);
+    const visW = visH * this.camera.aspect;
+    const sWorld = Math.min((visW * 0.86) / inkW, (visH * 0.6) / inkH);
+    const worldW = inkW * sWorld;
+    const worldH = inkH * sWorld;
+
+    const centre = this.camera.position.clone().addScaledVector(fwd, dist);
+    centre.y -= visH * 0.02;
+
+    // 散开球壳：和正常散开同一片区域
+    const { floorY, height, radius } = this.cfg.particles;
+    const cloud = new THREE.Vector3(0, floorY + height * 0.5, 0);
+    this.treeRoot.localToWorld(cloud);
+
+    const n = this.textCount;
+    const goal = this.textGoal;
+    const from = this.textFrom;
+    const to = this.textTo;
+    const nPts = pts.length / 2;
+    const tmp = new THREE.Vector3();
+
+    const cloudPoint = (out, i3) => {
+      const a = Math.random() * Math.PI * 2;
+      const b = Math.acos(2 * Math.random() - 1);
+      const r = radius * (1.6 + Math.random() * 1.6);
+      out[i3] = cloud.x + Math.sin(b) * Math.cos(a) * r;
+      out[i3 + 1] = cloud.y + Math.cos(b) * r * 0.7;
+      out[i3 + 2] = cloud.z + Math.sin(b) * Math.sin(a) * r;
+    };
+
+    for (let i = 0; i < n; i++) {
+      const i3 = i * 3;
+      const k = (Math.random() * nPts) | 0;
+      const u = (pts[k * 2] - cx) / inkW;
+      const v = (pts[k * 2 + 1] - cy) / inkH;
+      tmp.copy(centre)
+        .addScaledVector(right, u * worldW)
+        .addScaledVector(up, -v * worldH);
+      goal[i3] = tmp.x;
+      goal[i3 + 1] = tmp.y;
+      goal[i3 + 2] = tmp.z;
+      cloudPoint(from, i3);
+      cloudPoint(to, i3);
+      this.textPos[i3] = from[i3];
+      this.textPos[i3 + 1] = from[i3 + 1];
+      this.textPos[i3 + 2] = from[i3 + 2];
+    }
+    this.textGeometry.attributes.position.needsUpdate = true;
+    this.textPoints.visible = true;
+    this.textPoints.material.opacity = 1;
+
+    this.textPhase = 'in';
+    this.textT = 0;
+    this.textActive = true;
+    this._textShownAt = this.time;
+    this.mode = MODE.SCATTER;          // 树身粒子先散开
+    this._treeOpacityTarget = 0;       // 树淡出，让位给文字粒子
+    this.decor.visible = false;
+    if (this.ornamentMesh) this.ornamentMesh.visible = false;
+    if (this.star) this.star.visible = false;
+    return true;
+  }
+
+  _updateTextPoints(dt) {
+    if (this.textPhase === 'idle') return;
+    this.textT += dt;
+    const arr = this.textPos;
+    const n = this.textCount;
+
+    if (this.textPhase === 'in') {
+      const p = Math.min(1, this.textT / 0.9);
+      for (let i = 0; i < n; i++) {
+        const i3 = i * 3;
+        const e = p * p * (3 - 2 * p);
+        arr[i3] = this.textFrom[i3] + (this.textGoal[i3] - this.textFrom[i3]) * e;
+        arr[i3 + 1] = this.textFrom[i3 + 1] + (this.textGoal[i3 + 1] - this.textFrom[i3 + 1]) * e;
+        arr[i3 + 2] = this.textFrom[i3 + 2] + (this.textGoal[i3 + 2] - this.textFrom[i3 + 2]) * e;
+      }
+      this.textGeometry.attributes.position.needsUpdate = true;
+      if (p >= 1) this.textPhase = 'hold';
+      return;
+    }
+
+    if (this.textPhase === 'out') {
+      const p = Math.min(1, this.textT / 0.85);
+      const e = p * p * (3 - 2 * p);
+      for (let i = 0; i < n; i++) {
+        const i3 = i * 3;
+        arr[i3] = this.textGoal[i3] + (this.textTo[i3] - this.textGoal[i3]) * e;
+        arr[i3 + 1] = this.textGoal[i3 + 1] + (this.textTo[i3 + 1] - this.textGoal[i3 + 1]) * e;
+        arr[i3 + 2] = this.textGoal[i3 + 2] + (this.textTo[i3 + 2] - this.textGoal[i3 + 2]) * e;
+      }
+      this.textGeometry.attributes.position.needsUpdate = true;
+      this.textPoints.material.opacity = 1 - p * p;
+      if (p >= 1) {
+        this.textPhase = 'idle';
+        this.textPoints.visible = false;
+        this.decor.visible = true;
+        if (this.ornamentMesh) this.ornamentMesh.visible = true;
+        if (this.star) this.star.visible = true;
+      }
+    }
+  }
+
+  /** 结束文字形态：文字粒子飞散，树重新聚拢 */
+  hideText() {
+    if (!this.textActive) return;
+    this.textActive = false;
+    this.mode = MODE.TREE;
+    this._treeOpacityTarget = 1;
+    this.textPhase = 'out';
+    this.textT = 0;
+  }
+
   /** 从开场机位平滑过渡到交互机位（from: {z,y,targetY,fov}） */
   startCameraBlend(from, duration = 0.6) {
     if (!from) return;
@@ -809,8 +1109,11 @@ export class HoloTree {
     const t = this.time;
 
     // 相机：绕树转由 treeRoot 承担，所以相机只沿 z 推拉，保持构图稳定
-    this.treeRoot.rotation.y = rig.yaw;
-    this.treeRoot.rotation.x = rig.pitch;
+    // 文字形态期间冻结机位，保证文字一直正对屏幕
+    if (!this.textActive) {
+      this.treeRoot.rotation.y = rig.yaw;
+      this.treeRoot.rotation.x = rig.pitch;
+    }
     const zTo = this.cfg.camera.baseDistance * rig.distanceFactor;
     const yTo = 1.6 + rig.pitch * 4;
     if (this._camBlend) {
@@ -830,13 +1133,24 @@ export class HoloTree {
         this.camera.updateProjectionMatrix();
         this._camBlend = null;
       }
-    } else {
+    } else if (!this.textActive) {
       this.camera.position.z = zTo;
       this.camera.position.y = yTo;
       this.camera.lookAt(0, 0.4, 0);
     }
 
     this._updateParticles(dt, t);
+
+    // 树身粒子在文字阶段淡出/淡入
+    this._treeOpacity += (this._treeOpacityTarget - this._treeOpacity) * (1 - Math.exp(-7 * dt));
+    const op = this._treeOpacity;
+    const pmat = this.particles.material;
+    if (Math.abs(pmat.opacity - op) > 0.003) {
+      pmat.transparent = op < 0.995;
+      pmat.opacity = op;
+      pmat.depthWrite = op > 0.995;
+    }
+    this._updateTextPoints(dt);
 
     // 装饰球/照片：轻微上下浮动 + 缓慢自转
     this.decor.rotation.y += dt * 0.12;
@@ -878,7 +1192,7 @@ export class HoloTree {
 
       TMP_OBJ.position.set(this.pos[i3], this.pos[i3 + 1], this.pos[i3 + 2]);
       TMP_OBJ.rotation.set(this.seed[i] * 6 + t * 0.4, this.seed[i] * 3, 0);
-      TMP_OBJ.scale.setScalar(this.size[i] * (0.85 + 0.22 * Math.sin(t * 2.2 + this.seed[i])));
+      TMP_OBJ.scale.setScalar(this.size[i] * (0.85 + 0.22 * Math.sin(t * 2.2 + this.seed[i])) * (this.textActive ? 0.32 : 1));
       TMP_OBJ.updateMatrix();
       this.particles.setMatrixAt(i, TMP_OBJ.matrix);
     }

@@ -44,7 +44,7 @@ export const GESTURE = Object.freeze({
   FIST: 'FIST',
 });
 
-export const MODE = Object.freeze({ TREE: 'TREE', SCATTER: 'SCATTER' });
+export const MODE = Object.freeze({ TREE: 'TREE', SCATTER: 'SCATTER', TEXT: 'TEXT' });
 
 function dist2d(a, b) {
   return Math.hypot(a.x - b.x, a.y - b.y);
@@ -180,5 +180,59 @@ export class GestureRecognizer {
       openness: m.openness,
       pinchRatio: m.pinchRatio,
     };
+  }
+}
+
+
+/**
+ * 手势序列判定：例如 1 → 2 → 3 → 5（五指张开）触发一次动作。
+ * 每一步要稳定 holdMs 才认；整体超过 resetMs 没接上就重来。
+ */
+export class MorphSequence {
+  constructor(seq = [1, 2, 3, 5], { holdMs = 130, resetMs = 4000, cooldownMs = 1500 } = {}) {
+    this.seq = seq;
+    this.holdMs = holdMs;
+    this.resetMs = resetMs;
+    this.cooldownMs = cooldownMs;
+    this.step = 0;
+    this.cand = -1;
+    this.candAt = 0;
+    this.stable = -1;
+    this.stepAt = 0;
+    this.cooldownUntil = 0;
+  }
+
+  /** @returns {boolean} true = 序列完成，应该触发动作 */
+  update(count, now) {
+    if (count == null || count < 0) return false;
+    if (now < this.cooldownUntil) return false;
+
+    if (count !== this.cand) {
+      this.cand = count;
+      this.candAt = now;
+      return false;
+    }
+    if (now - this.candAt < this.holdMs) return false;
+    if (count === this.stable) return false;
+    this.stable = count;
+
+    if (count === 0) return false;
+    if (now - this.stepAt > this.resetMs) this.step = 0;
+
+    if (count === this.seq[this.step]) {
+      this.step++;
+      this.stepAt = now;
+      if (this.step === this.seq.length) {
+        this.step = 0;
+        this.stable = -1;
+        this.cand = -1;
+        this.cooldownUntil = now + this.cooldownMs;
+        return true;
+      }
+    } else {
+      this.step = count === this.seq[0] ? 1 : 0;
+      this.stepAt = now;
+    }
+    return false;
   }
 }

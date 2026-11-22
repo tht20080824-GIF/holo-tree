@@ -8,7 +8,7 @@
  */
 
 import { CONFIG } from './config.js';
-import { measureHand, GestureRecognizer, GESTURE, MODE } from './gesture.js';
+import { measureHand, GestureRecognizer, MorphSequence, GESTURE, MODE } from './gesture.js';
 import { Rig } from './controls.js';
 import { HoloTree } from './tree.js';
 import { HandTracker } from './hands.js';
@@ -73,6 +73,7 @@ const els = {
   gesture: $('#gesture'),
   mode: $('#mode'),
   fps: $('#fps'),
+  morphInput: $('#morph-input'),
   debug: $('#debug'),
   handDot: $('#hand-dot'),
   video: $('#cam-video'),
@@ -140,6 +141,7 @@ if (CONFIG.intro.enabled) {
 
 function startIntro() {
   if (!intro || introStarted) return;
+  closeCaptionModal();
   introStarted = true;
   introHoldStart = 0;
   if (intro.skipButton) intro.skipButton.textContent = '跳过开场';
@@ -192,6 +194,8 @@ function flashBridge() {
 
 // 按 R：把当前这条序列丢掉，重建一条，从头再放一遍（播到一半按也生效）
 function replayIntro() {
+  if (performance.now() < morphLockUntil) return;
+  if (tree.textActive) tree.hideText();
   if (!CONFIG.intro.enabled) {
     toast('开场动画已关闭');
     return;
@@ -231,6 +235,84 @@ function openPhoto(node) {
 
 function closePhoto() {
   tree.unfocusPhoto();
+}
+
+// ---------------------------------------------------------------- 照片文字
+// 加完照片弹一个小窗，让用户写一句话；写完显示在相框下面
+let captionQueue = [];
+let captionIdx = 0;
+let captionModal = null;
+
+function ensureCaptionModal() {
+  if (captionModal) return captionModal;
+  captionModal = document.createElement('div');
+  captionModal.id = 'caption-modal';
+  captionModal.innerHTML = `
+    <div class="caption-card">
+      <div class="caption-title">给这张照片写一句话</div>
+      <div class="caption-sub"></div>
+      <input id="caption-input" type="text" maxlength="30" placeholder="例如：圣诞快乐 · 2026 冬" autocomplete="off" spellcheck="false" />
+      <div class="caption-actions">
+        <button type="button" class="caption-btn skip">跳过</button>
+        <button type="button" class="caption-btn save">保存</button>
+      </div>
+    </div>`;
+  document.body.appendChild(captionModal);
+  // 打字时别让 R / 空格 / D 这些快捷键触发
+  captionModal.addEventListener('keydown', (e) => e.stopPropagation());
+  captionModal.querySelector('.skip').addEventListener('click', skipCaption);
+  captionModal.querySelector('.save').addEventListener('click', saveCaption);
+  const input = captionModal.querySelector('#caption-input');
+  input.addEventListener('keydown', (e) => {
+    e.stopPropagation();
+    if (e.key === 'Enter') saveCaption();
+    if (e.key === 'Escape') skipCaption();
+  });
+  captionModal.addEventListener('click', (e) => {
+    if (e.target === captionModal) skipCaption();
+  });
+  return captionModal;
+}
+
+function askCaption(nodes) {
+  if (!nodes || !nodes.length) return;
+  captionQueue = nodes.slice();
+  captionIdx = 0;
+  showCaptionStep();
+}
+
+function showCaptionStep() {
+  const node = captionQueue[captionIdx];
+  if (!node) { closeCaptionModal(); return; }
+  const modal = ensureCaptionModal();
+  modal.querySelector('.caption-sub').textContent = captionQueue.length > 1
+    ? `第 ${captionIdx + 1} / ${captionQueue.length} 张 · 可留空`
+    : '可留空，照片下面会显示这句话';
+  const input = modal.querySelector('#caption-input');
+  input.value = tree.photoCaption(node);
+  modal.classList.add('on');
+  requestAnimationFrame(() => input.focus());
+}
+
+function saveCaption() {
+  const node = captionQueue[captionIdx];
+  const input = captionModal?.querySelector('#caption-input');
+  if (node && input) tree.setPhotoCaption(node, input.value);
+  captionIdx++;
+  showCaptionStep();
+}
+
+function skipCaption() {
+  captionIdx++;
+  showCaptionStep();
+}
+
+function closeCaptionModal() {
+  if (!captionModal) return;
+  captionModal.classList.remove('on');
+  captionModal.querySelector('#caption-input')?.blur();
+  captionQueue = [];
+  captionIdx = 0;
 }
 
 window.addEventListener('keydown', (e) => {
@@ -313,6 +395,8 @@ attachPointerControls(canvasEl, rig, {
   onDoubleTap: () => switchMode(rig.mode === MODE.TREE ? MODE.SCATTER : MODE.TREE),
   onTap: (cx, cy, pointerType) => {
     // 返回 true = 这次点击已经用掉了，不要再拿去做双击切形态
+    if (performance.now() < morphLockUntil) return true;
+    if (tree.textActive) { tree.hideText(); return true; }
     const tag = `${pointerType} ${Math.round(cx)},${Math.round(cy)}`;
     if (tree.focusedPhoto) {
       showTapDebug(`${tag} → 关闭照片`);
@@ -360,6 +444,8 @@ window.addEventListener('keydown', (e) => {
 });
 
 function switchMode(mode) {
+  if (performance.now() < morphLockUntil) return;   // 变形动画前 3 秒不可打断
+  if (tree.textActive) { tree.hideText(); return; } // 文字形态下任何切换 = 收起文字
   if (mode === rig.mode) return;
   rig.setMode(mode);
   tree.setMode(mode);
@@ -368,6 +454,8 @@ function switchMode(mode) {
 }
 
 function fireBurst() {
+  if (performance.now() < morphLockUntil) return;
+  if (tree.textActive) tree.hideText();
   tree.burst();
 }
 
@@ -382,8 +470,11 @@ if (isTouchDevice && gyro.supported) {
 
 els.file.addEventListener('change', (e) => {
   const files = Array.from(e.target.files ?? []);
-  files.forEach((f) => tree.addPhotoFromSource(f));
-  if (files.length) toast(`已加入 ${files.length} 张照片`);
+  const added = files.map((f) => tree.addPhotoFromSource(f)).filter(Boolean);
+  if (added.length) {
+    toast(`已加入 ${added.length} 张照片`);
+    askCaption(added);   // 加完立刻让用户写照片文字
+  }
   els.file.value = '';
 });
 
@@ -449,6 +540,35 @@ let lastTime = performance.now();
 let firstFrame = true;
 let lastDebugAt = 0;
 
+// ---------------------------------------------------------------- 手势序列 → 粒子文字
+// 1 → 2 → 3 → 五指张开，触发粒子变形文字；3 秒内锁定交互
+const morphSeq = new MorphSequence([1, 2, 3, 5]);
+let morphLockUntil = 0;
+
+function fingerCountOf(out) {
+  if (!out?.hand) return -1;
+  if (out.openness > CONFIG.gesture.openOn) return 5;
+  return out.hand.extended.filter(Boolean).length;
+}
+
+function triggerMorph() {
+  if (tree.focusedPhoto) closePhoto();
+  closeCaptionModal();
+  const text = (els.morphInput?.value || '').trim() || '圣诞快乐';
+  if (!tree.showText(text)) return;
+  morphLockUntil = performance.now() + 3000;
+  toast(`✍️ ${text}`);
+}
+
+function feedMorphGesture(out, now) {
+  if (!tree || tree.textActive) return;
+  if (now < morphLockUntil) return;
+  const count = fingerCountOf(out);
+  if (count < 0) return;
+  if (morphSeq.update(count, now)) triggerMorph();
+}
+
+// ---------------------------------------------------------------- 帧率控制
 // ---------------------------------------------------------------- 帧率控制
 // 目标：稳定在 50~61fps。
 // 上限：高刷屏（≥100Hz）隔帧渲染，落到 60；90/144Hz 不跳帧，免得掉到 50 以下。
@@ -494,8 +614,8 @@ function frame(now) {
   if (document.hidden) { lastTime = now; return; }   // 后台不渲染，回来也不跳帧
   if (!shouldRenderFrame(now)) return;
 
-  // dt 上限 20ms = 50fps 的时间步长；掉帧时宁可慢一点，也不要一次跳一大步
-  const dt = Math.min((now - lastTime) / 1000, 0.02);
+  // dt 上限 50ms：掉帧时也不会一步跳太远，但不会把 16 秒开场拖成慢动作
+  const dt = Math.min((now - lastTime) / 1000, 0.05);
   lastTime = now;
   governFrameRate(dt);
 
@@ -526,12 +646,15 @@ function frame(now) {
   }
 
   const out = recognizer.update(latestHand, dt);
+  feedMorphGesture(out, now);
 
   // 手势切换形态（张开/握拳）
   if (out.modeChanged) switchMode(out.modeChanged);
 
   // 捏合：指着相框就展开，空着就撒花
   if (out.pinched && !frame._wasPinched) {
+    if (performance.now() < morphLockUntil) { frame._wasPinched = true; return; }
+    if (tree.textActive) { tree.hideText(); frame._wasPinched = true; return; }
     if (tree.focusedPhoto) closePhoto();
     else if (out.hand && tree.hovered) openPhoto(tree.hovered);
     else fireBurst();

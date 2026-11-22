@@ -628,7 +628,7 @@ export class IntroSequence {
 
     if (this.guide) {
       const show = t < T.gatherEnd
-        ? clamp01((t - 0.35) / 0.45) * (1 - clamp01((t - 2.3) / 0.5))
+        ? clamp01((t - 0.12) / 0.3) * (1 - clamp01((t - 2.95) / 0.25))
         : 0;
       this.guide.material.opacity = 0.95 * show;
       this.guide.rotation.x = -Math.PI / 2 + (this._guideOpen ?? DUST_TILT_TARGET);
