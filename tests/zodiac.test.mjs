@@ -87,3 +87,11 @@ test('仲裁：单比 2 之后手放下再比，冷却期内不重复触发', ()
   const again = feed(r, [{ count: 0, ms: 300 }, { count: 2, ms: 1800 }], 30, t + 200);
   assert.deepEqual(again.actions, ['zodiac']);
 });
+test('仲裁：按住「1」/「2」有进度反馈，到 100% 才触发', () => {
+  const r = new GestureRouter([1, 2, 3, 5]);
+  r.update(1, 0);
+  assert.ok(r.holdProgress(1, 500) > 0.4 && r.holdProgress(1, 500) < 0.6);
+  assert.ok(r.holdProgress(1, 1200) === 1);
+  r.update(2, 2000);
+  assert.ok(r.holdProgress(2, 2100) > 0);
+});

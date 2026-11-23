@@ -403,9 +403,9 @@ export class GestureRouter {
   constructor(seq = [1, 2, 3, 5], {
     // 「1」「2」停住触发爱心/生肖的门槛。
     // 必须明显长于「1→2→3→张开」里每一步的停留时间，否则做序列时会被爱心抢走。
-    heartHoldMs = 1400,
+    heartHoldMs = 1000,
     heartCooldownMs = 1600,
-    zodiacHoldMs = 1400,
+    zodiacHoldMs = 1000,
     zodiacCooldownMs = 1800,
     ...seqOpts
   } = {}) {
@@ -414,13 +414,28 @@ export class GestureRouter {
     this.heartCooldownMs = heartCooldownMs;
     this.zodiacHoldMs = zodiacHoldMs;
     this.zodiacCooldownMs = zodiacCooldownMs;
-    this._oneSince = 0;
+    this._oneSince = -1;    // -1 = 还没开始按住（0 会被当成「假值」，踩过）
     this._heartUntil = 0;
-    this._twoSince = 0;
+    this._twoSince = -1;
     this._zodiacUntil = 0;
     this._armed = true;     // 一次「按住」只触发一次，松开手指才重新装填
     this._twoArmed = true;
     this._suppressCount = -1;   // 刚触发爱心/生肖的那个手指数，改掉之前不再喂序列
+  }
+
+  /**
+   * 按住进度 0~1：HUD 上显示「❤️ 62%」，用户就知道还要停多久。
+   * @param {number} count
+   * @param {number} now
+   */
+  holdProgress(count, now) {
+    if (count === 1 && this._oneSince >= 0 && this._armed) {
+      return Math.min(1, (now - this._oneSince) / this.heartHoldMs);
+    }
+    if (count === 2 && this._twoSince >= 0 && this._twoArmed && this.seq.step === 0) {
+      return Math.min(1, (now - this._twoSince) / this.zodiacHoldMs);
+    }
+    return 0;
   }
 
   /**
@@ -430,21 +445,22 @@ export class GestureRouter {
    */
   update(count, now) {
     if (count == null || count < 0) {
-      this._oneSince = 0;
+      this._oneSince = -1;
+      this._twoSince = -1;
       return 'none';
     }
 
     if (count === 1) {
-      if (!this._oneSince) this._oneSince = now;
+      if (this._oneSince < 0) this._oneSince = now;
     } else {
-      this._oneSince = 0;
+      this._oneSince = -1;
       this._armed = true;      // 手指放下来了，下次再比 1 才能再触发
     }
 
     if (count === 2) {
-      if (!this._twoSince) this._twoSince = now;
+      if (this._twoSince < 0) this._twoSince = now;
     } else {
-      this._twoSince = 0;
+      this._twoSince = -1;
       this._twoArmed = true;
     }
 
@@ -462,7 +478,7 @@ export class GestureRouter {
     }
 
     // 只比「2」并停住 → 生肖（但 1→2 已经在走序列时不算）
-    const heldTwo = count === 2 && this._twoSince && now - this._twoSince >= this.zodiacHoldMs;
+    const heldTwo = count === 2 && this._twoSince >= 0 && now - this._twoSince >= this.zodiacHoldMs;
     if (heldTwo && this._twoArmed && this.seq.step === 0 && now >= this._zodiacUntil) {
       this._zodiacUntil = now + this.zodiacCooldownMs;
       this._twoArmed = false;
@@ -471,7 +487,7 @@ export class GestureRouter {
       return 'zodiac';
     }
 
-    const heldOne = count === 1 && this._oneSince && now - this._oneSince >= this.heartHoldMs;
+    const heldOne = count === 1 && this._oneSince >= 0 && now - this._oneSince >= this.heartHoldMs;
     if (heldOne && this._armed && now >= this._heartUntil) {
       this._armed = false;
       this._heartUntil = now + this.heartCooldownMs;

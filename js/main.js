@@ -86,6 +86,17 @@ const els = {
   toast: $('#toast'),
 };
 
+// 版本水印：把构建时间写进 HUD，一眼能看出跑的是不是最新包（缓存排查用）
+(() => {
+  const el = document.querySelector('.brand-ver');
+  if (!el) return;
+  const t = window.__HOLO_BUILD__ ? new Date(window.__HOLO_BUILD__) : null;
+  const tag = t
+    ? `${String(t.getMonth() + 1).padStart(2, '0')}-${String(t.getDate()).padStart(2, '0')} ${String(t.getHours()).padStart(2, '0')}:${String(t.getMinutes()).padStart(2, '0')}`
+    : 'dev';
+  el.textContent = `v1.0 · ${tag}`;
+})();
+
 const ctx = els.canvas.getContext('2d');
 const rig = new Rig(CONFIG.rig);
 const recognizer = new GestureRecognizer(CONFIG.gesture);
@@ -562,7 +573,7 @@ let lastDebugAt = 0;
 const stableCount = new StableCount({ windowMs: 150 });   // 手指数时域平滑，抗手机抖动
 
 const morphRouter = new GestureRouter([1, 2, 3, 5], {
-  holdMs: 90,
+  holdMs: 70,   // 序列每步更快认，手机上不用刻意停
   resetMs: 4000,
   cooldownMs: 1500,
   heartHoldMs: 800,
@@ -783,6 +794,13 @@ function frame(now) {
   if (shownCount === 5) gestureText = '🖐 张开';
   else if (shownCount >= 1 && shownCount <= 4) gestureText = `${'☝️✌️🤟🖖'[shownCount - 1]} ${shownCount} 指`;
   else gestureText = GESTURE_LABEL[out.gesture] ?? out.gesture;
+
+  // 按住「1」= 爱心、「2」= 生肖：显示进度，用户知道还要停多久
+  const hold = morphRouter.holdProgress(shownCount, now);
+  if (hold > 0.05) {
+    const tag = shownCount === 1 ? '❤️' : '🐭';
+    gestureText += ` · ${tag} ${Math.round(hold * 100)}%`;
+  }
 
   els.gesture.textContent = now < intentFlashUntil ? intentFlash : gestureText;
   const dirText = rig.spinDir > 0 ? '▶ 右转' : rig.spinDir < 0 ? '◀ 左转' : '自然自转';
