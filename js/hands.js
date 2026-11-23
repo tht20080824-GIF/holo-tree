@@ -117,21 +117,28 @@ export class HandTracker {
     this.onStatus('camera-ready');
 
     this.onStatus('loading-model');
-    const mp = HAS_VENDOR
-      ? await this._loadMediapipe()
-      : await import(CDN_MP);
     try {
-      // 单文件版没有 vendor 目录：直接走 CDN，不要先试本地路径。
-      // 先试本地会 404，FilesetResolver 拿到坏结果后会一直报 ModuleFactory not set。
-      if (!HAS_VENDOR) throw new Error('NO_VENDOR');
-      this.landmarker = await this._createLandmarker(mp, LOCAL_WASM, LOCAL_MODEL);
-    } catch (localErr) {
-      console.warn('[hands] 本地模型不可用，尝试 CDN：', localErr);
-      this.onStatus('loading-model-cdn');
-      this.landmarker = await this._createLandmarker(mp, CDN_WASM, CDN_MODEL);
+      const mp = HAS_VENDOR
+        ? await this._loadMediapipe()
+        : await import(CDN_MP);
+      try {
+        // 单文件版没有 vendor 目录：直接走 CDN，不要先试本地路径。
+        // 先试本地会 404，FilesetResolver 拿到坏结果后会一直报 ModuleFactory not set。
+        if (!HAS_VENDOR) throw new Error('NO_VENDOR');
+        this.landmarker = await this._createLandmarker(mp, LOCAL_WASM, LOCAL_MODEL);
+      } catch (localErr) {
+        console.warn('[hands] 本地模型不可用，尝试 CDN：', localErr);
+        this.onStatus('loading-model-cdn');
+        this.landmarker = await this._createLandmarker(mp, CDN_WASM, CDN_MODEL);
+      }
+      this.onStatus('ready');
+    } catch (modelErr) {
+      // 模型没加载成功不要连摄像头一起废掉：
+      // 摄像头已经开着，CAM 预览继续显示，只是暂时没有手势。
+      console.warn('[hands] 手势模型加载失败，保留摄像头预览：', modelErr);
+      this.landmarker = null;
+      this.onStatus('model-failed');
     }
-
-    this.onStatus('ready');
     this.running = true;
     this._tick();
   }
