@@ -616,7 +616,11 @@ function feedMorphGesture(out, now) {
   const raw = fingerCountOf(out);
   const count = stableCount.push(raw, now);   // 先平滑再判序列
   if (count < 0) return;
+  const stepBefore = morphRouter.seq.step;
   const action = morphRouter.update(count, now);
+  if (morphRouter.seq.step > stepBefore && morphRouter.seq.step < 4) {
+    toast(`👣 序列 ${morphRouter.seq.step}/4`);
+  }
   if (action === 'text') triggerMorph();
   else if (action === 'heart') triggerHeart();
   else if (action === 'zodiac') triggerZodiac();
@@ -773,11 +777,17 @@ function frame(now) {
   }
 
   // HUD
-  els.gesture.textContent = now < intentFlashUntil
-    ? intentFlash
-    : (GESTURE_LABEL[out.gesture] ?? out.gesture);
+  // 手势栏：0~4 根手指直接显示数字，5 根显示张开 —— 手机上能一眼看出识别对不对
+  const shownCount = out.hand ? fingerCountOf(out) : -1;
+  let gestureText;
+  if (shownCount === 5) gestureText = '🖐 张开';
+  else if (shownCount >= 1 && shownCount <= 4) gestureText = `${'☝️✌️🤟🖖'[shownCount - 1]} ${shownCount} 指`;
+  else gestureText = GESTURE_LABEL[out.gesture] ?? out.gesture;
+
+  els.gesture.textContent = now < intentFlashUntil ? intentFlash : gestureText;
   const dirText = rig.spinDir > 0 ? '▶ 右转' : rig.spinDir < 0 ? '◀ 左转' : '自然自转';
-  els.mode.textContent = `${rig.mode === MODE.TREE ? '合拢' : '散开'} · ${dirText}`;
+  const seqStep = morphRouter.seq.step;
+  els.mode.textContent = `${rig.mode === MODE.TREE ? '合拢' : '散开'} · ${dirText}${seqStep > 0 ? ` · 👣 ${seqStep}/4` : ''}`;
   if (now - lastFpsHudAt > 500) {
     lastFpsHudAt = now;
     els.fps.textContent = `${renderFps.toFixed(0)} fps · 画质 ${(qualityScale * 100).toFixed(0)}%`;

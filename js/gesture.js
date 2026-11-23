@@ -401,9 +401,11 @@ export class MorphSequence {
  */
 export class GestureRouter {
   constructor(seq = [1, 2, 3, 5], {
-    heartHoldMs = 800,
+    // 「1」「2」停住触发爱心/生肖的门槛。
+    // 必须明显长于「1→2→3→张开」里每一步的停留时间，否则做序列时会被爱心抢走。
+    heartHoldMs = 1400,
     heartCooldownMs = 1600,
-    zodiacHoldMs = 800,
+    zodiacHoldMs = 1400,
     zodiacCooldownMs = 1800,
     ...seqOpts
   } = {}) {
@@ -418,6 +420,7 @@ export class GestureRouter {
     this._zodiacUntil = 0;
     this._armed = true;     // 一次「按住」只触发一次，松开手指才重新装填
     this._twoArmed = true;
+    this._suppressCount = -1;   // 刚触发爱心/生肖的那个手指数，改掉之前不再喂序列
   }
 
   /**
@@ -445,6 +448,13 @@ export class GestureRouter {
       this._twoArmed = true;
     }
 
+    // 刚用「1」/「2」触发过爱心/生肖：继续比同一根手指数不再喂序列，
+    // 否则一直按着 1 会把序列的第一步重新登记上，接着比 2、3、张开就误触发文字。
+    if (this._suppressCount === count) {
+      return 'none';
+    }
+    if (this._suppressCount >= 0 && count !== this._suppressCount) this._suppressCount = -1;
+
     // 序列先跑：1 之后如果接上了 2，就把「爱心」的可能排掉
     if (this.seq.update(count, now)) {
       this._oneSince = 0;
@@ -457,6 +467,7 @@ export class GestureRouter {
       this._zodiacUntil = now + this.zodiacCooldownMs;
       this._twoArmed = false;
       this._twoSince = now;
+      this._suppressCount = count;
       return 'zodiac';
     }
 
@@ -466,6 +477,7 @@ export class GestureRouter {
       this._heartUntil = now + this.heartCooldownMs;
       this.seq.reset();          // 这个 1 算爱心，不算序列第一步
       this._oneSince = now;
+      this._suppressCount = count;
       return 'heart';
     }
 

@@ -64,7 +64,7 @@ function feed(router, plan, stepMs = 30, start = 0) {
 
 test('仲裁：只比「2」并停住 → 生肖', () => {
   const r = new GestureRouter([1, 2, 3, 5]);
-  const { actions } = feed(r, [{ count: 2, ms: 1200 }]);
+  const { actions } = feed(r, [{ count: 2, ms: 1800 }]);
   assert.deepEqual(actions, ['zodiac']);
 });
 
@@ -81,9 +81,9 @@ test('仲裁：1→2→3→5 走序列时，比 2 不会触发生肖', () => {
 
 test('仲裁：单比 2 之后手放下再比，冷却期内不重复触发', () => {
   const r = new GestureRouter([1, 2, 3, 5]);
-  const { actions, t } = feed(r, [{ count: 2, ms: 3000 }]);
+  const { actions, t } = feed(r, [{ count: 2, ms: 3600 }]);
   assert.deepEqual(actions, ['zodiac']);
 
-  const again = feed(r, [{ count: 0, ms: 300 }, { count: 2, ms: 1200 }], 30, t + 200);
+  const again = feed(r, [{ count: 0, ms: 300 }, { count: 2, ms: 1800 }], 30, t + 200);
   assert.deepEqual(again.actions, ['zodiac']);
 });

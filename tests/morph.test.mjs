@@ -80,7 +80,7 @@ function feed(router, plan, stepMs = 30, start = 0) {
 
 test('仲裁：只比「1」并停住 → 爱心', () => {
   const r = new GestureRouter([1, 2, 3, 5]);
-  const { actions } = feed(r, [{ count: 1, ms: 1200 }]);
+  const { actions } = feed(r, [{ count: 1, ms: 1800 }]);
   assert.deepEqual(actions, ['heart']);
 });
 
@@ -108,7 +108,7 @@ test('仲裁：1 停 0.4 秒（还不够久）再接着比 2、3、5 → 仍然�
 
 test('仲裁：比出爱心后，序列被作废，接着比 2、3、5 不会又变文字', () => {
   const r = new GestureRouter([1, 2, 3, 5]);
-  const first = feed(r, [{ count: 1, ms: 1000 }]);
+  const first = feed(r, [{ count: 1, ms: 1800 }]);
   assert.deepEqual(first.actions, ['heart']);
 
   const second = feed(r, [
@@ -121,12 +121,12 @@ test('仲裁：比出爱心后，序列被作废，接着比 2、3、5 不会又
 
 test('仲裁：比出爱心后继续比 1，冷却期内不重复触发', () => {
   const r = new GestureRouter([1, 2, 3, 5]);
-  const { actions, t } = feed(r, [{ count: 1, ms: 2600 }]);
+  const { actions, t } = feed(r, [{ count: 1, ms: 3200 }]);
   assert.equal(actions[0], 'heart');
   assert.equal(actions.length, 1, `冷却期内不该连触发，实际 ${actions.join(',')}`);
 
   // 手指放下来、过一会儿再比 1，应该能再触发一次
-  const again = feed(r, [{ count: 0, ms: 300 }, { count: 1, ms: 1400 }], 30, t + 200);
+  const again = feed(r, [{ count: 0, ms: 300 }, { count: 1, ms: 1800 }], 30, t + 200);
   assert.deepEqual(again.actions, ['heart']);
 });
 

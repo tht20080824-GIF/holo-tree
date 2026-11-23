@@ -726,7 +726,7 @@ body.ui-hidden #debug { opacity: 0; pointer-events: none; }
 
   <div id="toast"></div>
 
-  <script>window.__HOLO_NO_VENDOR__ = true; window.__HOLO_BUILD__ = "2026-11-23T07:39:06.918Z";</script>
+  <script>window.__HOLO_NO_VENDOR__ = true; window.__HOLO_BUILD__ = "2026-11-23T08:02:08.052Z";</script>
 <script>
 /* 由 tools/bundle.mjs 生成 —— 不要手改，改源码后重新构建 */
 (function () {
@@ -1357,7 +1357,11 @@ function feedMorphGesture(out, now) {
   const raw = fingerCountOf(out);
   const count = stableCount.push(raw, now);   // 先平滑再判序列
   if (count < 0) return;
+  const stepBefore = morphRouter.seq.step;
   const action = morphRouter.update(count, now);
+  if (morphRouter.seq.step > stepBefore && morphRouter.seq.step < 4) {
+    toast(`👣 序列 ${morphRouter.seq.step}/4`);
+  }
   if (action === 'text') triggerMorph();
   else if (action === 'heart') triggerHeart();
   else if (action === 'zodiac') triggerZodiac();
@@ -1514,11 +1518,17 @@ function frame(now) {
   }
 
   // HUD
-  els.gesture.textContent = now < intentFlashUntil
-    ? intentFlash
-    : (GESTURE_LABEL[out.gesture] ?? out.gesture);
+  // 手势栏：0~4 根手指直接显示数字，5 根显示张开 —— 手机上能一眼看出识别对不对
+  const shownCount = out.hand ? fingerCountOf(out) : -1;
+  let gestureText;
+  if (shownCount === 5) gestureText = '🖐 张开';
+  else if (shownCount >= 1 && shownCount <= 4) gestureText = `${'☝️✌️🤟🖖'[shownCount - 1]} ${shownCount} 指`;
+  else gestureText = GESTURE_LABEL[out.gesture] ?? out.gesture;
+
+  els.gesture.textContent = now < intentFlashUntil ? intentFlash : gestureText;
   const dirText = rig.spinDir > 0 ? '▶ 右转' : rig.spinDir < 0 ? '◀ 左转' : '自然自转';
-  els.mode.textContent = `${rig.mode === MODE.TREE ? '合拢' : '散开'} · ${dirText}`;
+  const seqStep = morphRouter.seq.step;
+  els.mode.textContent = `${rig.mode === MODE.TREE ? '合拢' : '散开'} · ${dirText}${seqStep > 0 ? ` · 👣 ${seqStep}/4` : ''}`;
   if (now - lastFpsHudAt > 500) {
     lastFpsHudAt = now;
     els.fps.textContent = `${renderFps.toFixed(0)} fps · 画质 ${(qualityScale * 100).toFixed(0)}%`;
@@ -2226,9 +2236,11 @@ class MorphSequence {
  */
 class GestureRouter {
   constructor(seq = [1, 2, 3, 5], {
-    heartHoldMs = 800,
+    // 「1」「2」停住触发爱心/生肖的门槛。
+    // 必须明显长于「1→2→3→张开」里每一步的停留时间，否则做序列时会被爱心抢走。
+    heartHoldMs = 1400,
     heartCooldownMs = 1600,
-    zodiacHoldMs = 800,
+    zodiacHoldMs = 1400,
     zodiacCooldownMs = 1800,
     ...seqOpts
   } = {}) {
@@ -2243,6 +2255,7 @@ class GestureRouter {
     this._zodiacUntil = 0;
     this._armed = true;     // 一次「按住」只触发一次，松开手指才重新装填
     this._twoArmed = true;
+    this._suppressCount = -1;   // 刚触发爱心/生肖的那个手指数，改掉之前不再喂序列
   }
 
   /**
@@ -2270,6 +2283,13 @@ class GestureRouter {
       this._twoArmed = true;
     }
 
+    // 刚用「1」/「2」触发过爱心/生肖：继续比同一根手指数不再喂序列，
+    // 否则一直按着 1 会把序列的第一步重新登记上，接着比 2、3、张开就误触发文字。
+    if (this._suppressCount === count) {
+      return 'none';
+    }
+    if (this._suppressCount >= 0 && count !== this._suppressCount) this._suppressCount = -1;
+
     // 序列先跑：1 之后如果接上了 2，就把「爱心」的可能排掉
     if (this.seq.update(count, now)) {
       this._oneSince = 0;
@@ -2282,6 +2302,7 @@ class GestureRouter {
       this._zodiacUntil = now + this.zodiacCooldownMs;
       this._twoArmed = false;
       this._twoSince = now;
+      this._suppressCount = count;
       return 'zodiac';
     }
 
@@ -2291,6 +2312,7 @@ class GestureRouter {
       this._heartUntil = now + this.heartCooldownMs;
       this.seq.reset();          // 这个 1 算爱心，不算序列第一步
       this._oneSince = now;
+      this._suppressCount = count;
       return 'heart';
     }
 
