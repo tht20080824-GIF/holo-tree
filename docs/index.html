@@ -726,7 +726,7 @@ body.ui-hidden #debug { opacity: 0; pointer-events: none; }
 
   <div id="toast"></div>
 
-  <script>window.__HOLO_NO_VENDOR__ = true; window.__HOLO_BUILD__ = "2026-11-23T12:05:22.628Z";</script>
+  <script>window.__HOLO_NO_VENDOR__ = true; window.__HOLO_BUILD__ = "2026-11-23T12:24:25.120Z";</script>
 <script>
 /* 由 tools/bundle.mjs 生成 —— 不要手改，改源码后重新构建 */
 (function () {
@@ -1366,7 +1366,9 @@ function feedMorphGesture(out, now) {
   if (!tree || tree.textActive) return;
   if (now < morphLockUntil) return;
   const raw = fingerCountOf(out);
-  const count = stableCount.push(raw, now);   // 先平滑再判序列
+  // 4 根也算「张开」：手机远景下手掌张开度常常差一点，凑不到 5
+  const normalized = raw >= 4 ? 5 : raw;
+  const count = stableCount.push(normalized, now);   // 先平滑再判序列
   if (count < 0) return;
   const stepBefore = morphRouter.seq.step;
   const action = morphRouter.update(count, now);
@@ -1782,7 +1784,7 @@ const CONFIG = {
   gesture: {
     pinchOn: 0.35,     // 拇指-食指距离 / 手掌尺度，小于它=捏合
     pinchOff: 0.55,    // 大于它=松开（滞回，防抖）
-    openOn: 1.6,       // 五指张开度大于它=张开手掌（真手张开约 2.0）
+    openOn: 1.45,      // 五指张开度大于它=张开手掌（真手约 2.0；1.6 时手机远景常常够不到）
     fistOn: 1.15,      // 张开度小于它=握拳（真手握拳约 0.9）
     holdTime: 0.3,     // 手势保持多久才切换形态（秒），防止误触
   },
@@ -2184,7 +2186,12 @@ class GestureRecognizer {
  * 每一步要稳定 holdMs 才认；整体超过 resetMs 没接上就重来。
  */
 class MorphSequence {
-  constructor(seq = [1, 2, 3, 5], { holdMs = 130, resetMs = 4000, cooldownMs = 1500 } = {}) {
+  constructor(seq = [1, 2, 3, 5], {
+    holdMs = 130,
+    resetMs = 4000,
+    cooldownMs = 1500,
+    graceMs = 260,     // 手指切换时的中间态（1→2 中间闪过 3 之类）容许的宽限
+  } = {}) {
     this.seq = seq;
     this.holdMs = holdMs;
     this.resetMs = resetMs;
@@ -2195,6 +2202,8 @@ class MorphSequence {
     this.stable = -1;
     this.stepAt = 0;
     this.cooldownUntil = 0;
+    this.graceMs = graceMs;
+    this._mismatchAt = 0;
   }
 
   /** 作废当前进度（比如这一下「1」被判成爱心了，不能再算序列第一步） */
@@ -2204,6 +2213,7 @@ class MorphSequence {
     this.stable = -1;
     this.candAt = 0;
     this.stepAt = 0;
+    this._mismatchAt = 0;
   }
 
   /** @returns {boolean} true = 序列完成，应该触发动作 */
@@ -2217,13 +2227,23 @@ class MorphSequence {
       return false;
     }
     if (now - this.candAt < this.holdMs) return false;
-    if (count === this.stable) return false;
+    if (count === this.stable) {
+      // 同一个「错误手势」一直保持：宽限到期就作废（否则上面那行会一直提前返回）
+      if (this._mismatchAt && now - this._mismatchAt >= this.graceMs) {
+        this._mismatchAt = 0;
+        this.step = count === this.seq[0] ? 1 : 0;
+        this.stepAt = now;
+      }
+      return false;
+    }
     this.stable = count;
 
     if (count === 0) return false;
     if (now - this.stepAt > this.resetMs) this.step = 0;
 
-    if (count === this.seq[this.step]) {
+    const expected = this.seq[this.step];
+    if (count === expected) {
+      this._mismatchAt = 0;
       this.step++;
       this.stepAt = now;
       if (this.step === this.seq.length) {
@@ -2233,10 +2253,23 @@ class MorphSequence {
         this.cooldownUntil = now + this.cooldownMs;
         return true;
       }
-    } else {
-      this.step = count === this.seq[0] ? 1 : 0;
-      this.stepAt = now;
+      return false;
     }
+
+    // 不符合预期：先给 graceMs 宽限。
+    // 换手指的过程中常会短暂数错（比如 1→2 之间闪过 3），
+    // 以前这种中间态会立刻把序列清零，用户看起来就是「比了没反应」。
+    if (this.step > 0) {
+      if (!this._mismatchAt) {
+        this._mismatchAt = now;
+        return false;
+      }
+      if (now - this._mismatchAt < this.graceMs) return false;
+    }
+
+    this._mismatchAt = 0;
+    this.step = count === this.seq[0] ? 1 : 0;
+    this.stepAt = now;
     return false;
   }
 }

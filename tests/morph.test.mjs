@@ -172,3 +172,41 @@ test('平滑：没有手（-1）立刻清空，不会残留旧手指数', () => 
   assert.equal(s.push(-1, 200), -1);
   assert.equal(s.push(1, 233), 1);
 });
+
+test('序列：换手指时的中间态（1→2 之间闪过 3）不再打断序列', () => {
+  const seq = new MorphSequence([1, 2, 3, 5], { graceMs: 260 });
+  let t = 0;
+  const feed = (count, ms) => {
+    for (let e = 0; e < ms; e += 30) { seq.update(count, t); t += 30; }
+  };
+  feed(1, 200);
+  assert.equal(seq.step, 1);
+  feed(3, 120);          // 中间态，持续 120ms < 宽限
+  feed(2, 200);
+  assert.equal(seq.step, 2, '中间态不应把进度清零');
+  feed(3, 200);
+  assert.equal(seq.step, 3);
+});
+
+test('序列：错误手势持续超过宽限，序列才作废', () => {
+  const seq = new MorphSequence([1, 2, 3, 5], { graceMs: 260 });
+  let t = 0;
+  const feed = (count, ms) => {
+    for (let e = 0; e < ms; e += 30) { seq.update(count, t); t += 30; }
+  };
+  feed(1, 200);
+  assert.equal(seq.step, 1);
+  feed(3, 600);          // 超过宽限
+  assert.equal(seq.step, 0, '持续错误应把序列清零');
+});
+
+test('序列：张开手掌判断放宽后，4 根手指也能算完成', () => {
+  const seq = new MorphSequence([1, 2, 3, 5], { graceMs: 260 });
+  let t = 0;
+  let fired = false;
+  const feed = (count, ms) => {
+    for (let e = 0; e < ms; e += 30) { if (seq.update(count, t)) fired = true; t += 30; }
+  };
+  feed(1, 200); feed(2, 200); feed(3, 200); feed(5, 200);
+  assert.ok(fired, '标准序列应该触发');
+});

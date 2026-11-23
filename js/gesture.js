@@ -331,7 +331,12 @@ export class GestureRecognizer {
  * 每一步要稳定 holdMs 才认；整体超过 resetMs 没接上就重来。
  */
 export class MorphSequence {
-  constructor(seq = [1, 2, 3, 5], { holdMs = 130, resetMs = 4000, cooldownMs = 1500 } = {}) {
+  constructor(seq = [1, 2, 3, 5], {
+    holdMs = 130,
+    resetMs = 4000,
+    cooldownMs = 1500,
+    graceMs = 260,     // 手指切换时的中间态（1→2 中间闪过 3 之类）容许的宽限
+  } = {}) {
     this.seq = seq;
     this.holdMs = holdMs;
     this.resetMs = resetMs;
@@ -342,6 +347,8 @@ export class MorphSequence {
     this.stable = -1;
     this.stepAt = 0;
     this.cooldownUntil = 0;
+    this.graceMs = graceMs;
+    this._mismatchAt = 0;
   }
 
   /** 作废当前进度（比如这一下「1」被判成爱心了，不能再算序列第一步） */
@@ -351,6 +358,7 @@ export class MorphSequence {
     this.stable = -1;
     this.candAt = 0;
     this.stepAt = 0;
+    this._mismatchAt = 0;
   }
 
   /** @returns {boolean} true = 序列完成，应该触发动作 */
@@ -364,13 +372,23 @@ export class MorphSequence {
       return false;
     }
     if (now - this.candAt < this.holdMs) return false;
-    if (count === this.stable) return false;
+    if (count === this.stable) {
+      // 同一个「错误手势」一直保持：宽限到期就作废（否则上面那行会一直提前返回）
+      if (this._mismatchAt && now - this._mismatchAt >= this.graceMs) {
+        this._mismatchAt = 0;
+        this.step = count === this.seq[0] ? 1 : 0;
+        this.stepAt = now;
+      }
+      return false;
+    }
     this.stable = count;
 
     if (count === 0) return false;
     if (now - this.stepAt > this.resetMs) this.step = 0;
 
-    if (count === this.seq[this.step]) {
+    const expected = this.seq[this.step];
+    if (count === expected) {
+      this._mismatchAt = 0;
       this.step++;
       this.stepAt = now;
       if (this.step === this.seq.length) {
@@ -380,10 +398,23 @@ export class MorphSequence {
         this.cooldownUntil = now + this.cooldownMs;
         return true;
       }
-    } else {
-      this.step = count === this.seq[0] ? 1 : 0;
-      this.stepAt = now;
+      return false;
     }
+
+    // 不符合预期：先给 graceMs 宽限。
+    // 换手指的过程中常会短暂数错（比如 1→2 之间闪过 3），
+    // 以前这种中间态会立刻把序列清零，用户看起来就是「比了没反应」。
+    if (this.step > 0) {
+      if (!this._mismatchAt) {
+        this._mismatchAt = now;
+        return false;
+      }
+      if (now - this._mismatchAt < this.graceMs) return false;
+    }
+
+    this._mismatchAt = 0;
+    this.step = count === this.seq[0] ? 1 : 0;
+    this.stepAt = now;
     return false;
   }
 }

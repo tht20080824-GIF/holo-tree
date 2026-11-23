@@ -625,7 +625,9 @@ function feedMorphGesture(out, now) {
   if (!tree || tree.textActive) return;
   if (now < morphLockUntil) return;
   const raw = fingerCountOf(out);
-  const count = stableCount.push(raw, now);   // 先平滑再判序列
+  // 4 根也算「张开」：手机远景下手掌张开度常常差一点，凑不到 5
+  const normalized = raw >= 4 ? 5 : raw;
+  const count = stableCount.push(normalized, now);   // 先平滑再判序列
   if (count < 0) return;
   const stepBefore = morphRouter.seq.step;
   const action = morphRouter.update(count, now);
