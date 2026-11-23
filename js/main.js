@@ -373,6 +373,7 @@ function statusText(code) {
     'loading-model': '加载手势模型…',
     'loading-model-cdn': '本地模型缺失，改用 CDN…',
     'requesting-camera': '等待摄像头授权…',
+    'camera-ready': '摄像头就绪 · 正在加载手势模型…',
     ready: '手势就绪 · 手放进画面里',
     'camera-denied': '摄像头不可用 · 用手指拖拽也能玩',
     'model-failed': '手势模型加载失败 · 用手指拖拽也能玩',
@@ -388,6 +389,7 @@ const tracker = new HandTracker({
   video: els.video,
   onHand,
   onStatus: statusText,
+  onCameraReady: () => { cameraSettled = true; removeGate(); },
   onFps: (v) => { fps = v; },
 });
 

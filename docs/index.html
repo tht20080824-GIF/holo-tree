@@ -757,7 +757,7 @@ body.ui-hidden #debug { opacity: 0; pointer-events: none; }
 
   <div id="toast"></div>
 
-  <script>window.__HOLO_NO_VENDOR__ = false; window.__HOLO_BUILD__ = "2026-11-23T15:38:58.910Z";</script>
+  <script>window.__HOLO_NO_VENDOR__ = false; window.__HOLO_BUILD__ = "2026-11-23T15:53:21.094Z";</script>
 <script>
 /* 由 tools/bundle.mjs 生成 —— 不要手改，改源码后重新构建 */
 (function () {
@@ -1145,6 +1145,7 @@ function statusText(code) {
     'loading-model': '加载手势模型…',
     'loading-model-cdn': '本地模型缺失，改用 CDN…',
     'requesting-camera': '等待摄像头授权…',
+    'camera-ready': '摄像头就绪 · 正在加载手势模型…',
     ready: '手势就绪 · 手放进画面里',
     'camera-denied': '摄像头不可用 · 用手指拖拽也能玩',
     'model-failed': '手势模型加载失败 · 用手指拖拽也能玩',
@@ -1160,6 +1161,7 @@ const tracker = new HandTracker({
   video: els.video,
   onHand,
   onStatus: statusText,
+  onCameraReady: () => { cameraSettled = true; removeGate(); },
   onFps: (v) => { fps = v; },
 });
 
@@ -4700,11 +4702,12 @@ const CDN_MODEL =
   'https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task';
 
 class HandTracker {
-  constructor({ video, onHand, onStatus = () => {}, onFps = () => {} }) {
+  constructor({ video, onHand, onStatus = () => {}, onFps = () => {}, onCameraReady = () => {} }) {
     this.video = video;
     this.onHand = onHand;
     this.onStatus = onStatus;
     this.onFps = onFps;
+    this.onCameraReady = onCameraReady;
 
     this.landmarker = null;
     this.stream = null;
@@ -4763,6 +4766,28 @@ class HandTracker {
       throw err;
     }
 
+    // —— 顺序很重要：先开摄像头（快），再在后台加载模型（慢，7.8MB）——
+    // 以前是先下模型再开摄像头，网络慢的时候整页会卡在「正在启动…」好几分钟。
+    this.onStatus('requesting-camera');
+    this.stream = await navigator.mediaDevices.getUserMedia({
+      video: {
+        width: 640,
+        height: 480,
+        // 默认 30fps（省电、降温）；检测到手之后 setHandActive(true) 会升到 60
+        frameRate: { ideal: 30, max: 60 },
+        facingMode: 'user',
+      },
+      audio: false,
+    });
+
+    this.video.srcObject = this.stream;
+    await this.video.play();
+
+    this.running = true;
+    this._tick();                    // 先跑起来（模型没好时 _tick 什么也不做）
+    this.onCameraReady();            // 摄像头就绪：主场景可以先开，模型慢慢加载
+    this.onStatus('camera-ready');
+
     this.onStatus('loading-model');
     const mp = HAS_VENDOR
       ? await this._loadMediapipe()
@@ -4778,26 +4803,7 @@ class HandTracker {
       this.landmarker = await this._createLandmarker(mp, CDN_WASM, CDN_MODEL);
     }
 
-    this.onStatus('requesting-camera');
-    this.stream = await navigator.mediaDevices.getUserMedia({
-      // 手势跟手动：向摄像头要 60fps（不支持时浏览器会自动退到最接近的帧率）
-      video: {
-        // 采集降到 480×360：CAM 预览本来就只有 160×120，识别精度几乎无感，
-        // 但摄像头/ISP 和 MediaPipe 的负担明显下降
-        // 抬到 640×480：手机远景下手更大一点，关键点更稳（480×360 时手指容易糊成一团）
-        width: 640,
-        height: 480,
-        // 默认 30fps（省电、降温）；检测到手之后 setHandActive(true) 会升到 60
-        frameRate: { ideal: 30, max: 60 },
-        facingMode: 'user',
-      },
-      audio: false,
-    });
-
-    this.video.srcObject = this.stream;
-    await this.video.play();
     this.onStatus('ready');
-
     this.running = true;
     this._tick();
   }
@@ -4821,6 +4827,11 @@ class HandTracker {
 
     // 页面在后台就不做识别
     if (document.hidden) {
+      this._scheduleNext();
+      return;
+    }
+
+    if (!this.landmarker) {   // 模型还在后台加载
       this._scheduleNext();
       return;
     }

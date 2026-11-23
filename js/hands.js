@@ -30,11 +30,12 @@ const CDN_MODEL =
   'https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task';
 
 export class HandTracker {
-  constructor({ video, onHand, onStatus = () => {}, onFps = () => {} }) {
+  constructor({ video, onHand, onStatus = () => {}, onFps = () => {}, onCameraReady = () => {} }) {
     this.video = video;
     this.onHand = onHand;
     this.onStatus = onStatus;
     this.onFps = onFps;
+    this.onCameraReady = onCameraReady;
 
     this.landmarker = null;
     this.stream = null;
@@ -93,6 +94,28 @@ export class HandTracker {
       throw err;
     }
 
+    // —— 顺序很重要：先开摄像头（快），再在后台加载模型（慢，7.8MB）——
+    // 以前是先下模型再开摄像头，网络慢的时候整页会卡在「正在启动…」好几分钟。
+    this.onStatus('requesting-camera');
+    this.stream = await navigator.mediaDevices.getUserMedia({
+      video: {
+        width: 640,
+        height: 480,
+        // 默认 30fps（省电、降温）；检测到手之后 setHandActive(true) 会升到 60
+        frameRate: { ideal: 30, max: 60 },
+        facingMode: 'user',
+      },
+      audio: false,
+    });
+
+    this.video.srcObject = this.stream;
+    await this.video.play();
+
+    this.running = true;
+    this._tick();                    // 先跑起来（模型没好时 _tick 什么也不做）
+    this.onCameraReady();            // 摄像头就绪：主场景可以先开，模型慢慢加载
+    this.onStatus('camera-ready');
+
     this.onStatus('loading-model');
     const mp = HAS_VENDOR
       ? await this._loadMediapipe()
@@ -108,26 +131,7 @@ export class HandTracker {
       this.landmarker = await this._createLandmarker(mp, CDN_WASM, CDN_MODEL);
     }
 
-    this.onStatus('requesting-camera');
-    this.stream = await navigator.mediaDevices.getUserMedia({
-      // 手势跟手动：向摄像头要 60fps（不支持时浏览器会自动退到最接近的帧率）
-      video: {
-        // 采集降到 480×360：CAM 预览本来就只有 160×120，识别精度几乎无感，
-        // 但摄像头/ISP 和 MediaPipe 的负担明显下降
-        // 抬到 640×480：手机远景下手更大一点，关键点更稳（480×360 时手指容易糊成一团）
-        width: 640,
-        height: 480,
-        // 默认 30fps（省电、降温）；检测到手之后 setHandActive(true) 会升到 60
-        frameRate: { ideal: 30, max: 60 },
-        facingMode: 'user',
-      },
-      audio: false,
-    });
-
-    this.video.srcObject = this.stream;
-    await this.video.play();
     this.onStatus('ready');
-
     this.running = true;
     this._tick();
   }
@@ -151,6 +155,11 @@ export class HandTracker {
 
     // 页面在后台就不做识别
     if (document.hidden) {
+      this._scheduleNext();
+      return;
+    }
+
+    if (!this.landmarker) {   // 模型还在后台加载
       this._scheduleNext();
       return;
     }
