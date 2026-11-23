@@ -269,7 +269,9 @@ const safeBundle = bundle.replace(/<\/script/gi, '<\\/script');
 const openTag = CDN_MODE ? '<script type="module">' : '<script>';
 html = html.replace(
   /<script type="module" src="\.\/js\/main\.js"><\/script>/,
-  () => `<script>window.__HOLO_NO_VENDOR__ = true; window.__HOLO_BUILD__ = "${new Date().toISOString()}";</script>\n${openTag}\n${safeBundle}\n</script>`,
+  () => CDN_MODE
+    ? `<script>window.__HOLO_NO_VENDOR__ = true; window.__HOLO_BUILD__ = "${new Date().toISOString()}";</script>\n${openTag}\n${safeBundle}\n</script>`
+    : `<script>window.__HOLO_NO_VENDOR__ = false; window.__HOLO_BUILD__ = "${new Date().toISOString()}";</script>\n${openTag}\n${safeBundle}\n</script>`,
 );
 
 if (html.includes('__defs') === false) throw new Error('入口脚本没有被替换，检查 index.html 的 script 标签');
@@ -283,6 +285,21 @@ if (CDN_MODE) {
   fs.writeFileSync(path.join(root, outDir, '圣诞树.html'), html, 'utf8');
 }
 fs.writeFileSync(path.join(root, outDir, 'index.html'), html, 'utf8');
+
+// 发布版必须带上 vendor：MediaPipe 的 wasm + 模型 走 CDN 会因网络慢直接失败，
+// 表现就是「摄像头能开，但永远识别不到手」。这里把 vendor 一起拷进 docs/。
+if (!CDN_MODE) {
+  const copyDir = (from, to) => {
+    fs.mkdirSync(to, { recursive: true });
+    for (const e of fs.readdirSync(from, { withFileTypes: true })) {
+      const a = path.join(from, e.name);
+      const b = path.join(to, e.name);
+      if (e.isDirectory()) copyDir(a, b);
+      else fs.copyFileSync(a, b);
+    }
+  };
+  copyDir(path.join(root, 'vendor'), path.join(root, outDir, 'vendor'));
+}
 
 const kb = (n) => `${(n / 1024).toFixed(0)}KB`;
 console.log('—— 单文件构建 ——');

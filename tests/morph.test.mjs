@@ -27,9 +27,10 @@ test('少一步（1→2→3）不触发', () => {
   assert.equal(r.fired, 0);
 });
 
-test('中间插错（1→2→4）后重新从 1 开始，仍能触发', () => {
+test('中间插错（1→2→张开）后重新从 1 开始，仍能触发', () => {
+  // 注意：4 现在被当成「3 的容错」，所以这里用 5 当错误手势
   const seq = new MorphSequence([1, 2, 3, 5]);
-  const r = play(seq, [1, 2, 4, 1, 2, 3, 5]);
+  const r = play(seq, [1, 2, 5, 1, 2, 3, 5]);
   assert.equal(r.fired, 1);
 });
 
@@ -196,7 +197,7 @@ test('序列：错误手势持续超过宽限，序列才作废', () => {
   };
   feed(1, 200);
   assert.equal(seq.step, 1);
-  feed(3, 600);          // 超过宽限
+  feed(5, 600);          // 5 是跳两级，算错误手势，超过宽限应清零
   assert.equal(seq.step, 0, '持续错误应把序列清零');
 });
 
@@ -209,4 +210,81 @@ test('序列：张开手掌判断放宽后，4 根手指也能算完成', () => 
   };
   feed(1, 200); feed(2, 200); feed(3, 200); feed(5, 200);
   assert.ok(fired, '标准序列应该触发');
+});
+
+test('序列：比 3 时若被数成 4，也算这一步过了（只放宽序列）', () => {
+  const seq = new MorphSequence([1, 2, 3, 5], { graceMs: 260 });
+  let t = 0;
+  let fired = false;
+  const feed = (count, ms) => {
+    for (let e = 0; e < ms; e += 30) { if (seq.update(count, t)) fired = true; t += 30; }
+  };
+  feed(1, 200); feed(2, 200); feed(4, 200); feed(5, 200);
+  assert.ok(fired, '3 被数成 4 也应完成序列');
+});
+
+test('序列：1、2 两步仍然严格（比 1 不能顶替 2）', () => {
+  const seq = new MorphSequence([1, 2, 3, 5], { graceMs: 260 });
+  let t = 0;
+  const feed = (count, ms) => { for (let e = 0; e < ms; e += 30) { seq.update(count, t); t += 30; } };
+  feed(1, 200);
+  assert.equal(seq.step, 1);
+  feed(1, 400);            // 继续比 1，不能推进到第 3 步
+  assert.equal(seq.step, 1);
+});
+
+test('序列：HUD 能查到「这一步需要几根手指」', () => {
+  const r = new GestureRouter([1, 2, 3, 5]);
+  assert.equal(r.expectedCount(), 0, '没开始时应为 0');
+  r.update(1, 0);
+  r.update(1, 200);          // 稳定 200ms，第 1 步才被登记
+  assert.equal(r.expectedCount(), 2);
+  r.update(2, 400);
+  r.update(2, 600);
+  assert.equal(r.expectedCount(), 3);
+});
+
+test('生产配置：爱心/生肖的停留门槛不能低于 750ms', async () => {
+  const { readFile } = await import('node:fs/promises');
+  const src = await readFile(new URL('../js/main.js', import.meta.url), 'utf8');
+  const m = src.match(/new GestureRouter\(\[1, 2, 3, 5\][\s\S]{0,200}?heartHoldMs:\s*(\d+)/);
+  assert.ok(m, 'main.js 里应该显式设置 heartHoldMs');
+  assert.ok(Number(m[1]) >= 750, `heartHoldMs=${m[1]} 太小`);
+});
+
+test('仲裁：快速 1→2→3→5 不会被判成爱心（手指一直在变就重置计时）', () => {
+  const r = new GestureRouter([1, 2, 3, 5], { heartHoldMs: 800, zodiacHoldMs: 800 });
+  let out = 'none';
+  const seq = [1, 1, 2, 2, 3, 3, 5, 5];
+  seq.forEach((c, i) => {
+    const res = r.update(c, i * 150);
+    if (res === 'text') out = 'text';
+    assert.notEqual(res, 'heart', '快速序列中途不能判成爱心');
+  });
+  assert.equal(out, 'text');
+});
+
+test('仲裁：单独比 1 停住 800ms 仍然出爱心', () => {
+  const r = new GestureRouter([1, 2, 3, 5], { heartHoldMs: 800 });
+  assert.equal(r.update(1, 0), 'none');
+  assert.equal(r.update(1, 400), 'none');
+  assert.equal(r.update(1, 900), 'heart');
+});
+
+test('序列：手换太快、中间那一步被漏掉（1→3→5）也能触发', () => {
+  const seq = new MorphSequence([1, 2, 3, 5], { holdMs: 45, graceMs: 400 });
+  let t = 0;
+  let fired = false;
+  const feed = (count, ms) => { for (let e = 0; e < ms; e += 30) { if (seq.update(count, t)) fired = true; t += 30; } };
+  feed(1, 120); feed(3, 120); feed(5, 120);
+  assert.ok(fired, '跳过 2 也应该能完成');
+});
+
+test('序列：只允许跳一级，1→5 不算', () => {
+  const seq = new MorphSequence([1, 2, 3, 5], { holdMs: 45, graceMs: 400 });
+  let t = 0;
+  let fired = false;
+  const feed = (count, ms) => { for (let e = 0; e < ms; e += 30) { if (seq.update(count, t)) fired = true; t += 30; } };
+  feed(1, 120); feed(5, 600);
+  assert.equal(fired, false);
 });

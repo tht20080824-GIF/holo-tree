@@ -128,6 +128,22 @@ body.ui-hidden #debug { opacity: 0; pointer-events: none; }
 #morph-input::placeholder { color: rgba(233, 201, 124, 0.4); }
 #morph-input:focus { border-color: rgba(233, 201, 124, 0.7); }
 
+/* 生肖输入框：与「文字」框同一套样式（之前是浏览器默认白底，太跳） */
+#zodiac-input {
+  width: 104px;
+  padding: 3px 7px;
+  border-radius: 6px;
+  border: 1px solid rgba(233, 201, 124, 0.28);
+  background: rgba(255, 255, 255, 0.05);
+  color: #ffe9c2;
+  font-family: inherit;
+  font-size: 12px;
+  text-align: right;
+  outline: none;
+}
+#zodiac-input::placeholder { color: rgba(233, 201, 124, 0.4); }
+#zodiac-input:focus { border-color: rgba(233, 201, 124, 0.7); }
+
 /* ------------------------------------------------- 工具条 */
 #tools {
   top: 22px;
@@ -174,6 +190,14 @@ body.ui-hidden #debug { opacity: 0; pointer-events: none; }
   color: var(--gold);
   margin-bottom: 8px;
 }
+.legend-sub {
+  font-size: 10px;
+  letter-spacing: 0.18em;
+  color: #7e918f;
+  margin: 10px 0 2px;
+}
+.legend-sub:first-of-type { margin-top: 2px; }
+.legend-tip { display: block; color: #8ea3a6; font-size: 11px; margin-top: 1px; }
 #legend ul { margin: 0; padding: 0; list-style: none; }
 #legend li {
   font-size: 12px;
@@ -351,6 +375,7 @@ body.ui-hidden #debug { opacity: 0; pointer-events: none; }
   }
   .legend-title { font-size: 9.5px; margin-bottom: 4px; letter-spacing: 0.18em; }
   #legend li { font-size: 10.5px; line-height: 1.6; }
+  .legend-tip { font-size: 10px; }
   .legend-foot { display: none; }
   #cam-panel {
     width: 112px; padding: 6px;

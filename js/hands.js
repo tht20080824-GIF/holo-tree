@@ -11,7 +11,10 @@
  * 这里就会直接走 CDN，不会先撞一次 404。
  */
 
-const CDN_MP = 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.3/+esm';
+// 必须用官方 ESM 入口 vision_bundle.mjs：
+// jsdelivr 的 `+esm` 会重写内部地址，wasm 加载器拿不到 ModuleFactory，
+// 报「ModuleFactory not set」——单文件版（GitHub Pages / 隧道）就是这样彻底没手势的。
+const CDN_MP = 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.3/vision_bundle.mjs';
 
 // 用 document.baseURI 而不是 import.meta.url：打包成单文件（经典脚本）后
 // import.meta 是不存在的语法，直接用会让整个 bundle 解析失败。
@@ -95,6 +98,9 @@ export class HandTracker {
       ? await this._loadMediapipe()
       : await import(CDN_MP);
     try {
+      // 单文件版没有 vendor 目录：直接走 CDN，不要先试本地路径。
+      // 先试本地会 404，FilesetResolver 拿到坏结果后会一直报 ModuleFactory not set。
+      if (!HAS_VENDOR) throw new Error('NO_VENDOR');
       this.landmarker = await this._createLandmarker(mp, LOCAL_WASM, LOCAL_MODEL);
     } catch (localErr) {
       console.warn('[hands] 本地模型不可用，尝试 CDN：', localErr);

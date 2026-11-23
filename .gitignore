@@ -1,5 +1,6 @@
 # 依赖（18MB，可随时用 tools/fetch-vendor.sh 重新拉）
-vendor/
+# 只忽略根目录：docs/vendor 是发布版必须带上的（MediaPipe 走 CDN 会失败）
+/vendor/
 
 # 构建产物：单文件版和 CDN 版会随源码重建，不入库
 dist-cdn/
@@ -9,6 +10,9 @@ dist-cdn/
 *.key
 .ca-key.pem
 .lan-key.pem
+
+# 本地临时产物（截图、提帧、隧道日志）
+.tmp/
 
 # 系统文件
 .DS_Store

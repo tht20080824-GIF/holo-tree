@@ -165,7 +165,13 @@ export class HoloTree {
   // ---------------------------------------------------------------- setup
 
   _initRenderer() {
-    this.renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
+    // 高分屏不要开 MSAA：像素比 2 时 4x MSAA 的开销非常大，而且视觉上看不出差别。
+    // 只在 1x（普通屏）时才开抗锯齿。
+    const dpr = window.devicePixelRatio || 1;
+    this.renderer = new THREE.WebGLRenderer({
+      antialias: dpr < 1.5,
+      powerPreference: 'high-performance',
+    });
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, this.cfg.quality.maxPixelRatio));
     this.renderer.setSize(window.innerWidth, window.innerHeight);
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;

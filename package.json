@@ -8,6 +8,12 @@
     "start": "python3 -m http.server 8767",
     "test": "node --test tests/*.test.mjs",
     "verify": "node tools/verify.mjs",
-    "vendor": "bash tools/fetch-vendor.sh"
+    "vendor": "bash tools/fetch-vendor.sh",
+    "shot": "node tools/shot.mjs",
+    "shot:phone": "node tools/shot.mjs --width 390 --height 844 --shots 4,9,14,20",
+    "smoke": "node tools/smoke.mjs"
+  },
+  "devDependencies": {
+    "playwright-core": "^1.65.1"
   }
 }

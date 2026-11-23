@@ -194,22 +194,42 @@ export function measureHand(lm) {
   const openness = tipSum / FINGER_TIPS.length / scale;
 
   // 单指是否伸直：指尖离手腕明显比第二关节远
-  // 伸直判据：① 指尖离手腕明显比第二关节远；② 第二关节处夹角够大（接近一条直线）。
-  // 只看距离的话，手机远景下手小、关键点抖，很容易把伸直判成蜷起。
+  // ---- 手掌坐标系：用掌面法向 + 掌心朝前方向判「伸直」----
+  // 2D 距离比在手机远景下会被手部朝向骗到（侧对镜头时伸直的手指看着很近），
+  // 换成 3D 的手掌坐标系后就与镜头角度无关了。
+  const P = (i) => lm[i] || { x: 0, y: 0, z: 0 };
+  const sub = (a, b) => ({ x: a.x - b.x, y: a.y - b.y, z: (a.z || 0) - (b.z || 0) });
+  const len = (v) => Math.hypot(v.x, v.y, v.z) || 1e-6;
+  const dot = (a, b) => a.x * b.x + a.y * b.y + a.z * b.z;
+  const norm = (v) => { const l = len(v); return { x: v.x / l, y: v.y / l, z: v.z / l }; };
+  const cross = (a, b) => ({
+    x: a.y * b.z - a.z * b.y,
+    y: a.z * b.x - a.x * b.z,
+    z: a.x * b.y - a.y * b.x,
+  });
+
+  // forward：掌心朝向（手腕 → 中指根）；normal：掌面法向（食指根 × 小指根）
+  const forward = norm(sub(P(9), P(0)));
+
   const extended = FINGERS.map(([mcp, pip, tip]) => {
-    const far = dist2d(lm[tip], wrist) > dist2d(lm[pip], wrist) * 1.12;
-    const a1 = lm[mcp];
-    const a2 = lm[pip];
-    const a3 = lm[tip];
-    const v1x = a1.x - a2.x;
-    const v1y = a1.y - a2.y;
-    const v2x = a3.x - a2.x;
-    const v2y = a3.y - a2.y;
-    const n1 = Math.hypot(v1x, v1y);
-    const n2 = Math.hypot(v2x, v2y);
-    const cos = n1 > 1e-6 && n2 > 1e-6 ? (v1x * v2x + v1y * v2y) / (n1 * n2) : 1;
-    const straight = cos < -0.82;   // 夹角 > ~145°
-    return far || straight;
+    const a = P(mcp);
+    const b = P(pip);
+    const c = P(tip);
+
+    // ① 3D 指节夹角（伸直 ≈ 180°，蜷起 < 120°）
+    const v1 = sub(a, b);
+    const v2 = sub(c, b);
+    const cos = dot(v1, v2) / (len(v1) * len(v2));
+    const straight = cos < -0.72;
+
+    // ② 指尖沿「掌心朝前」方向伸出多少（用指节长度归一化，与手大小无关）
+    const proj = dot(sub(c, a), forward);
+    const seg = len(sub(b, a));
+    const along = seg > 1e-6 ? proj / seg : 0;
+
+    // 必须「又直又伸」才认：只看距离会把蜷起的手指也算进来
+    // （用户比 1，中指蜷着但指尖离手腕更远 → 被判成 2 指，就是这个坑）
+    return straight && along > 0.85;
   });
 
   return {
@@ -335,7 +355,7 @@ export class MorphSequence {
     holdMs = 130,
     resetMs = 4000,
     cooldownMs = 1500,
-    graceMs = 260,     // 手指切换时的中间态（1→2 中间闪过 3 之类）容许的宽限
+    graceMs = 400,     // 手指切换时的中间态（1→2 中间闪过 3 之类）容许的宽限
   } = {}) {
     this.seq = seq;
     this.holdMs = holdMs;
@@ -349,6 +369,13 @@ export class MorphSequence {
     this.cooldownUntil = 0;
     this.graceMs = graceMs;
     this._mismatchAt = 0;
+    // 每一步允许的手指数集合：只放宽序列自己，不碰「1/2 停住」那两条判定
+    // idx2 = 比 3 时无名指/小指常被判错，容忍 4；idx3 = 张开，4 根也算
+    this.accept = seq.map((n, i) => {
+      if (i === seq.length - 1) return new Set([n, n - 1]);
+      if (i === 2 && n === 3) return new Set([3, 4]);
+      return new Set([n]);
+    });
   }
 
   /** 作废当前进度（比如这一下「1」被判成爱心了，不能再算序列第一步） */
@@ -386,8 +413,16 @@ export class MorphSequence {
     if (count === 0) return false;
     if (now - this.stepAt > this.resetMs) this.step = 0;
 
-    const expected = this.seq[this.step];
-    if (count === expected) {
+    const ok = this.accept[this.step].has(count);
+    // 跳一级也算过：手换得太快，中间那种手指整帧被漏掉（1 直接到 3）
+    // 只有序列已经开跑（step>0）才允许跳级；
+    // 否则单比「2」会直接跳到第 3 步，把「比 2 = 生肖」这条判定顶掉。
+    const skip = !ok
+      && this.step > 0
+      && this.step + 1 < this.seq.length
+      && this.accept[this.step + 1].has(count);
+    if (ok || skip) {
+      if (skip) this.step += 1;
       this._mismatchAt = 0;
       this.step++;
       this.stepAt = now;
@@ -445,6 +480,8 @@ export class GestureRouter {
     this.heartCooldownMs = heartCooldownMs;
     this.zodiacHoldMs = zodiacHoldMs;
     this.zodiacCooldownMs = zodiacCooldownMs;
+    this._lastChangeAt = 0; // 手指数最后变化的时间（换手指 = 正在走序列）
+    this._prevCount = -1;
     this._oneSince = -1;    // -1 = 还没开始按住（0 会被当成「假值」，踩过）
     this._heartUntil = 0;
     this._twoSince = -1;
@@ -454,6 +491,13 @@ export class GestureRouter {
     this._suppressCount = -1;   // 刚触发爱心/生肖的那个手指数，改掉之前不再喂序列
   }
 
+  /** 序列当前等待的手指数（0 表示序列没在跑） */
+  expectedCount() {
+    if (this.seq.step <= 0) return 0;
+    const set = this.seq.accept[this.seq.step];
+    return set ? Math.min(...set) : 0;
+  }
+
   /**
    * 按住进度 0~1：HUD 上显示「❤️ 62%」，用户就知道还要停多久。
    * @param {number} count
@@ -461,10 +505,10 @@ export class GestureRouter {
    */
   holdProgress(count, now) {
     if (count === 1 && this._oneSince >= 0 && this._armed) {
-      return Math.min(1, (now - this._oneSince) / this.heartHoldMs);
+      return Math.min(1, (now - Math.max(this._oneSince, this._lastChangeAt)) / this.heartHoldMs);
     }
     if (count === 2 && this._twoSince >= 0 && this._twoArmed && this.seq.step === 0) {
-      return Math.min(1, (now - this._twoSince) / this.zodiacHoldMs);
+      return Math.min(1, (now - Math.max(this._twoSince, this._lastChangeAt)) / this.zodiacHoldMs);
     }
     return 0;
   }
@@ -495,6 +539,12 @@ export class GestureRouter {
       this._twoArmed = true;
     }
 
+    // 手指还在变，说明用户在走 1→2→3→5，这时候不该判爱心/生肖
+    if (count !== this._prevCount) {
+      this._prevCount = count;
+      this._lastChangeAt = now;
+    }
+
     // 刚用「1」/「2」触发过爱心/生肖：继续比同一根手指数不再喂序列，
     // 否则一直按着 1 会把序列的第一步重新登记上，接着比 2、3、张开就误触发文字。
     if (this._suppressCount === count) {
@@ -509,7 +559,8 @@ export class GestureRouter {
     }
 
     // 只比「2」并停住 → 生肖（但 1→2 已经在走序列时不算）
-    const heldTwo = count === 2 && this._twoSince >= 0 && now - this._twoSince >= this.zodiacHoldMs;
+    const stillTwo = now - Math.max(this._twoSince, this._lastChangeAt) >= this.zodiacHoldMs;
+    const heldTwo = count === 2 && this._twoSince >= 0 && stillTwo;
     if (heldTwo && this._twoArmed && this.seq.step === 0 && now >= this._zodiacUntil) {
       this._zodiacUntil = now + this.zodiacCooldownMs;
       this._twoArmed = false;
@@ -518,7 +569,8 @@ export class GestureRouter {
       return 'zodiac';
     }
 
-    const heldOne = count === 1 && this._oneSince >= 0 && now - this._oneSince >= this.heartHoldMs;
+    const stillOne = now - Math.max(this._oneSince, this._lastChangeAt) >= this.heartHoldMs;
+    const heldOne = count === 1 && this._oneSince >= 0 && stillOne;
     if (heldOne && this._armed && now >= this._heartUntil) {
       this._armed = false;
       this._heartUntil = now + this.heartCooldownMs;

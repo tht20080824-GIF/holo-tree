@@ -40,6 +40,7 @@
     <div class="hud-row"><span class="hud-key">形态</span><span id="mode">合拢</span></div>
     <div class="hud-row"><span class="hud-key">帧率</span><span id="fps">—</span></div>
     <div class="hud-row"><span class="hud-key">文字</span><input id="morph-input" type="text" maxlength="12" placeholder="圣诞快乐" autocomplete="off" spellcheck="false" /></div>
+    <div class="hud-row"><span class="hud-key">生肖</span><input id="zodiac-input" type="text" maxlength="4" placeholder="鼠" autocomplete="off" spellcheck="false" /></div>
   </div>
 
   <!-- 右上工具 -->
@@ -60,19 +61,24 @@
   <!-- 左下操作说明 -->
   <div id="legend">
     <div class="legend-title">怎么玩</div>
+    <div class="legend-sub">视角</div>
     <ul>
-      <li><b>手划一下</b> 横划转身 / 竖划抬头 · 手停在一边会持续转</li>
-      <li><b>手推向镜头</b> 拉近，拉远后退</li>
-      <li><b>五指张开</b> 散开 · <b>握拳</b> 合拢</li>
-      <li><b>拇指食指捏合</b> 指相框展开照片，空着撒金粒子</li>
-      <li><b>点相框</b> 也能展开 · 再点一下关闭</li>
-      <li><b>＋ 加照片</b> 换成自己的照片（可多张）</li>
-      <li><b>比「1」停住</b> 粒子聚成爱心</li>
-      <li><b>比「2」停住</b> 输入框里写生肖（鼠牛虎兔龙蛇马羊猴鸡狗猪）→ 变成对应生肖</li>
-      <li><b>1 → 2 → 3 → 张开</b> 粒子变成文字（快速接着比才是文字，停住是爱心）</li>
-      <li><b>点 ↻</b> 重播开场</li>
+      <li><b>横划</b> 转身 · <b>竖划</b> 抬头 · 手停在一边会持续转</li>
+      <li><b>手伸向镜头</b> 拉近 · <b>收回来</b> 后退</li>
+      <li><b>张开五指</b> 散开 · <b>握拳</b> 合拢</li>
     </ul>
-    <div class="legend-foot">没有摄像头？鼠标拖拽 + 滚轮同样能玩</div>
+    <div class="legend-sub">照片</div>
+    <ul>
+      <li><b>捏合</b> 指向相框 → 展开 · 指空处 → 撒金粒</li>
+      <li><b>点相框</b> 展开 / 再点关闭 · <b>＋</b> 换自己的照片</li>
+    </ul>
+    <div class="legend-sub">彩蛋手势</div>
+    <ul>
+      <li><b>比 1 停住</b> → 粒子聚成爱心</li>
+      <li><b>比 2 停住</b> → 「生肖」框里的动物 <span class="legend-tip">鼠牛虎兔龙蛇马羊猴鸡狗猪</span></li>
+      <li><b>1 → 2 → 3 → 张开</b> → 「文字」框里的字 <span class="legend-tip">要连着比，停住会被当成爱心</span></li>
+    </ul>
+    <div class="legend-foot">没摄像头？鼠标拖拽 + 滚轮同样能玩 · 点 ↻ 重播开场</div>
   </div>
 
   <!-- 右下摄像头预览 -->

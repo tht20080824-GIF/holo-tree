@@ -75,6 +75,7 @@ const els = {
   mode: $('#mode'),
   fps: $('#fps'),
   morphInput: $('#morph-input'),
+  zodiacInput: $('#zodiac-input'),
   debug: $('#debug'),
   handDot: $('#hand-dot'),
   video: $('#cam-video'),
@@ -162,6 +163,7 @@ function startIntro() {
   document.body.classList.add('intro-on');
   els.loader.classList.add('hidden');
   toast('开场开始');
+  if (SKIP_INTRO) setTimeout(() => { if (intro) intro.done = true; }, 900);
 }
 
 function endIntro() {
@@ -181,6 +183,7 @@ function endIntro() {
   if (handoff) handoffToMainBody(camFrom);
   // 手机上「怎么玩」面板是收起的，开场结束后给一条一次性提示
   if (isTouchDevice) toast('点相框看大图 · 右上 ＋ 换照片');
+  runDemo();
 }
 
 // 闪屏之后不再切黑场：主场景先铺成散开态，再用 0.26s 收拢成主体。
@@ -570,15 +573,32 @@ let lastDebugAt = 0;
 // ---------------------------------------------------------------- 手势序列 → 粒子文字
 // 1 → 2 → 3 → 五指张开，触发粒子变形文字；3 秒内锁定交互
 // 手势仲裁：单独「1」停住 = 爱心；1→2→3→5 = 文字
-const stableCount = new StableCount({ windowMs: 150 });   // 手指数时域平滑，抗手机抖动
+let seqStallAt = 0;   // 序列卡住的起点（毫秒），用来在 HUD 上提示「需要 N 指」
+const stableCount = new StableCount({ windowMs: 90 });   // 窗口越短反应越快，手机上 150ms 太粘   // 手指数时域平滑，抗手机抖动
 
 const morphRouter = new GestureRouter([1, 2, 3, 5], {
-  holdMs: 70,   // 序列每步更快认，手机上不用刻意停
+  holdMs: 45,   // 序列每步更快认，手机上不用刻意停
   resetMs: 4000,
   cooldownMs: 1500,
+  // 这两条必须在 1 秒以上：低于它就抢在 1→2→3→5 前面触发爱心/生肖，序列永远走不完
+  // 800ms 是「手指停住」的门槛：只要手指数一直在变（走序列），这个计时会被重置
   heartHoldMs: 800,
+  zodiacHoldMs: 800,
 });
 let morphLockUntil = 0;
+
+// ?demo=heart|text|zodiac 自动触发一次形态变化，配合 tools/shot.mjs 做无头复现
+const QS = new URLSearchParams(location.search);
+const DEMO = QS.get('demo');
+const SKIP_INTRO = QS.get('skipintro') === '1';
+function runDemo() {
+  if (!DEMO) return;
+  setTimeout(() => {
+    if (DEMO === 'heart') triggerHeart();
+    else if (DEMO === 'zodiac') triggerZodiac();
+    else triggerMorph();
+  }, 800);
+}
 
 function fingerCountOf(out) {
   if (!out?.hand) return -1;
@@ -591,7 +611,7 @@ function triggerMorph() {
   closeCaptionModal();
   const text = (els.morphInput?.value || '').trim() || '圣诞快乐';
   if (!tree.showText(text)) return;
-  morphLockUntil = performance.now() + 3000;
+  morphLockUntil = performance.now() + 1200;
   toast(`✍️ ${text}`);
 }
 
@@ -599,16 +619,17 @@ function triggerMorph() {
 function triggerZodiac() {
   if (tree.focusedPhoto) closePhoto();
   closeCaptionModal();
-  const raw = (els.morphInput?.value || '').trim();
+  // 生肖有自己的输入框，和「文字」互不干扰
+  const raw = (els.zodiacInput?.value || '').trim();
   if (!raw) {
-    toast('✍️ 先在上面输入一个生肖：鼠 牛 虎 兔 龙 蛇 马 羊 猴 鸡 狗 猪');
+    toast('🐭 先在「生肖」输入框里填一个：鼠 牛 虎 兔 龙 蛇 马 羊 猴 鸡 狗 猪');
     return;
   }
   if (!tree.showZodiac(raw)) {
     toast('只认十二生肖：鼠 牛 虎 兔 龙 蛇 马 羊 猴 鸡 狗 猪');
     return;
   }
-  morphLockUntil = performance.now() + 3000;
+  morphLockUntil = performance.now() + 1200;
   toast(`✨ ${raw}`);
 }
 
@@ -617,7 +638,7 @@ function triggerHeart() {
   if (tree.focusedPhoto) closePhoto();
   closeCaptionModal();
   if (!tree.showHeart()) return;
-  morphLockUntil = performance.now() + 3000;
+  morphLockUntil = performance.now() + 1200;
   toast('❤️ 爱心');
 }
 
@@ -629,6 +650,13 @@ function feedMorphGesture(out, now) {
   const normalized = raw >= 4 ? 5 : raw;
   const count = stableCount.push(normalized, now);   // 先平滑再判序列
   if (count < 0) return;
+  // 卡住检测用这一帧平滑后的 count（不能引用 HUD 里的 shownCount —— 那是另一个作用域）
+  if (morphRouter.seq.step > 0 && count !== morphRouter.expectedCount()) {
+    if (!seqStallAt) seqStallAt = now;
+  } else {
+    seqStallAt = 0;
+  }
+
   const stepBefore = morphRouter.seq.step;
   const action = morphRouter.update(count, now);
   if (morphRouter.seq.step > stepBefore && morphRouter.seq.step < 4) {
@@ -649,7 +677,7 @@ const BASE_PR = Math.min(window.devicePixelRatio || 1, isTouchDevice ? 1.6 : 2);
 let rafGap = 16.7;        // 估测的屏幕刷新间隔
 let lastRafAt = 0;
 let renderFps = 60;
-let qualityScale = 1;
+const qualityScale = 1;   // 固定 100%：不做动态降分辨率
 let perfElapsed = 0;
 let perfFrames = 0;
 let lastFpsHudAt = 0;
@@ -664,21 +692,14 @@ function shouldRenderFrame(now) {
 
 function governFrameRate(dt) {
   renderFps += (1 / Math.max(dt, 1e-3) - renderFps) * 0.05;
-  if (intro) return;          // 开场用独立的 composer，先别动像素比，免得尺寸不同步
-  if (rafGap < 16) return;    // 高刷屏（>60Hz）是主动隔帧，不是性能不够，别再降画质
+  // 只统计，不再自动降画质：用户要求画面不允许被压缩。
+  // 帧率靠「关掉高分屏 MSAA」这类不损画质的手段来保。
+  if (intro) return;
   perfElapsed += dt;
   perfFrames++;
   if (perfElapsed < 1.2) return;
-  const fps = perfFrames / perfElapsed;
   perfElapsed = 0;
   perfFrames = 0;
-  if (fps < 50 && qualityScale > 0.7) {
-    qualityScale = Math.max(0.7, qualityScale - 0.1);
-    tree?.setPixelRatio(BASE_PR * qualityScale);
-  } else if (fps > 58 && qualityScale < 1) {
-    qualityScale = Math.min(1, qualityScale + 0.05);
-    tree?.setPixelRatio(BASE_PR * qualityScale);
-  }
 }
 
 function frame(now) {
@@ -730,7 +751,7 @@ function frame(now) {
     els.handDot.classList.remove('on');
     if (now - lastFpsHudAt > 500) {
       lastFpsHudAt = now;
-      els.fps.textContent = `${renderFps.toFixed(0)} fps · 画质 ${(qualityScale * 100).toFixed(0)}%`;
+      els.fps.textContent = `${renderFps.toFixed(0)} fps · ${(1000 / Math.max(renderFps, 1)).toFixed(1)} ms · 画质 ${(qualityScale * 100).toFixed(0)}%`;
     }
     return;
   }
@@ -792,10 +813,15 @@ function frame(now) {
   // HUD
   // 手势栏：0~4 根手指直接显示数字，5 根显示张开 —— 手机上能一眼看出识别对不对
   const shownCount = out.hand ? fingerCountOf(out) : -1;
+  // 诊断附注：四根手指的伸直判定 + 张开度，出问题时截一张图就能定位
+  const diag = out.hand
+    ? ` · [${out.hand.extended.map((e) => (e ? 1 : 0)).join('')}] · 张 ${out.openness.toFixed(2)}`
+    : '';
   let gestureText;
   if (shownCount === 5) gestureText = '🖐 张开';
   else if (shownCount >= 1 && shownCount <= 4) gestureText = `${'☝️✌️🤟🖖'[shownCount - 1]} ${shownCount} 指`;
   else gestureText = GESTURE_LABEL[out.gesture] ?? out.gesture;
+  gestureText += diag;
 
   // 按住「1」= 爱心、「2」= 生肖：显示进度，用户知道还要停多久
   const hold = morphRouter.holdProgress(shownCount, now);
@@ -807,10 +833,19 @@ function frame(now) {
   els.gesture.textContent = now < intentFlashUntil ? intentFlash : gestureText;
   const dirText = rig.spinDir > 0 ? '▶ 右转' : rig.spinDir < 0 ? '◀ 左转' : '自然自转';
   const seqStep = morphRouter.seq.step;
-  els.mode.textContent = `${rig.mode === MODE.TREE ? '合拢' : '散开'} · ${dirText}${seqStep > 0 ? ` · 👣 ${seqStep}/4` : ''}`;
+  let seqHint = '';
+  if (seqStep > 0) {
+    seqHint = ` · 👣 ${seqStep}/4`;
+    // 卡住超过 1.2 秒就把「它现在要几根手指」直接写出来，不用猜
+    const need = morphRouter.expectedCount();
+    if (need && shownCount !== need && now - (seqStallAt || 0) > 1200) {
+      seqHint += ` · 需要 ${need} 指`;
+    }
+  }
+  els.mode.textContent = `${rig.mode === MODE.TREE ? '合拢' : '散开'} · ${dirText}${seqHint}`;
   if (now - lastFpsHudAt > 500) {
     lastFpsHudAt = now;
-    els.fps.textContent = `${renderFps.toFixed(0)} fps · 画质 ${(qualityScale * 100).toFixed(0)}%`;
+    els.fps.textContent = `${renderFps.toFixed(0)} fps · ${(1000 / Math.max(renderFps, 1)).toFixed(1)} ms · 画质 ${(qualityScale * 100).toFixed(0)}%`;
   }
 
   if (debugOn && now - lastDebugAt > 100) {
@@ -821,7 +856,7 @@ function frame(now) {
           ? new Date(window.__HOLO_BUILD__).toLocaleString('zh-CN', { hour12: false })
           : 'dev'
       }`,
-      `画面 ${renderFps.toFixed(0)} fps · 画质 ${(qualityScale * 100).toFixed(0)}%`,
+      `画面 ${renderFps.toFixed(0)} fps · ${(1000 / Math.max(renderFps, 1)).toFixed(1)} ms · 画质 ${(qualityScale * 100).toFixed(0)}%`,
       `手势识别 ${fps} fps`,
       `张开度 ${out.openness.toFixed(2)}  (张开>${CONFIG.gesture.openOn} / 握拳<${CONFIG.gesture.fistOn})`,
       `捏合比 ${out.pinchRatio.toFixed(2)}  (捏合<${CONFIG.gesture.pinchOn})`,

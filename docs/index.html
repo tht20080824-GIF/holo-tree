@@ -138,6 +138,22 @@ body.ui-hidden #debug { opacity: 0; pointer-events: none; }
 #morph-input::placeholder { color: rgba(233, 201, 124, 0.4); }
 #morph-input:focus { border-color: rgba(233, 201, 124, 0.7); }
 
+/* 生肖输入框：与「文字」框同一套样式（之前是浏览器默认白底，太跳） */
+#zodiac-input {
+  width: 104px;
+  padding: 3px 7px;
+  border-radius: 6px;
+  border: 1px solid rgba(233, 201, 124, 0.28);
+  background: rgba(255, 255, 255, 0.05);
+  color: #ffe9c2;
+  font-family: inherit;
+  font-size: 12px;
+  text-align: right;
+  outline: none;
+}
+#zodiac-input::placeholder { color: rgba(233, 201, 124, 0.4); }
+#zodiac-input:focus { border-color: rgba(233, 201, 124, 0.7); }
+
 /* ------------------------------------------------- 工具条 */
 #tools {
   top: 22px;
@@ -184,6 +200,14 @@ body.ui-hidden #debug { opacity: 0; pointer-events: none; }
   color: var(--gold);
   margin-bottom: 8px;
 }
+.legend-sub {
+  font-size: 10px;
+  letter-spacing: 0.18em;
+  color: #7e918f;
+  margin: 10px 0 2px;
+}
+.legend-sub:first-of-type { margin-top: 2px; }
+.legend-tip { display: block; color: #8ea3a6; font-size: 11px; margin-top: 1px; }
 #legend ul { margin: 0; padding: 0; list-style: none; }
 #legend li {
   font-size: 12px;
@@ -361,6 +385,7 @@ body.ui-hidden #debug { opacity: 0; pointer-events: none; }
   }
   .legend-title { font-size: 9.5px; margin-bottom: 4px; letter-spacing: 0.18em; }
   #legend li { font-size: 10.5px; line-height: 1.6; }
+  .legend-tip { font-size: 10px; }
   .legend-foot { display: none; }
   #cam-panel {
     width: 112px; padding: 6px;
@@ -672,6 +697,7 @@ body.ui-hidden #debug { opacity: 0; pointer-events: none; }
     <div class="hud-row"><span class="hud-key">形态</span><span id="mode">合拢</span></div>
     <div class="hud-row"><span class="hud-key">帧率</span><span id="fps">—</span></div>
     <div class="hud-row"><span class="hud-key">文字</span><input id="morph-input" type="text" maxlength="12" placeholder="圣诞快乐" autocomplete="off" spellcheck="false" /></div>
+    <div class="hud-row"><span class="hud-key">生肖</span><input id="zodiac-input" type="text" maxlength="4" placeholder="鼠" autocomplete="off" spellcheck="false" /></div>
   </div>
 
   <!-- 右上工具 -->
@@ -692,19 +718,24 @@ body.ui-hidden #debug { opacity: 0; pointer-events: none; }
   <!-- 左下操作说明 -->
   <div id="legend">
     <div class="legend-title">怎么玩</div>
+    <div class="legend-sub">视角</div>
     <ul>
-      <li><b>手划一下</b> 横划转身 / 竖划抬头 · 手停在一边会持续转</li>
-      <li><b>手推向镜头</b> 拉近，拉远后退</li>
-      <li><b>五指张开</b> 散开 · <b>握拳</b> 合拢</li>
-      <li><b>拇指食指捏合</b> 指相框展开照片，空着撒金粒子</li>
-      <li><b>点相框</b> 也能展开 · 再点一下关闭</li>
-      <li><b>＋ 加照片</b> 换成自己的照片（可多张）</li>
-      <li><b>比「1」停住</b> 粒子聚成爱心</li>
-      <li><b>比「2」停住</b> 输入框里写生肖（鼠牛虎兔龙蛇马羊猴鸡狗猪）→ 变成对应生肖</li>
-      <li><b>1 → 2 → 3 → 张开</b> 粒子变成文字（快速接着比才是文字，停住是爱心）</li>
-      <li><b>点 ↻</b> 重播开场</li>
+      <li><b>横划</b> 转身 · <b>竖划</b> 抬头 · 手停在一边会持续转</li>
+      <li><b>手伸向镜头</b> 拉近 · <b>收回来</b> 后退</li>
+      <li><b>张开五指</b> 散开 · <b>握拳</b> 合拢</li>
     </ul>
-    <div class="legend-foot">没有摄像头？鼠标拖拽 + 滚轮同样能玩</div>
+    <div class="legend-sub">照片</div>
+    <ul>
+      <li><b>捏合</b> 指向相框 → 展开 · 指空处 → 撒金粒</li>
+      <li><b>点相框</b> 展开 / 再点关闭 · <b>＋</b> 换自己的照片</li>
+    </ul>
+    <div class="legend-sub">彩蛋手势</div>
+    <ul>
+      <li><b>比 1 停住</b> → 粒子聚成爱心</li>
+      <li><b>比 2 停住</b> → 「生肖」框里的动物 <span class="legend-tip">鼠牛虎兔龙蛇马羊猴鸡狗猪</span></li>
+      <li><b>1 → 2 → 3 → 张开</b> → 「文字」框里的字 <span class="legend-tip">要连着比，停住会被当成爱心</span></li>
+    </ul>
+    <div class="legend-foot">没摄像头？鼠标拖拽 + 滚轮同样能玩 · 点 ↻ 重播开场</div>
   </div>
 
   <!-- 右下摄像头预览 -->
@@ -726,7 +757,7 @@ body.ui-hidden #debug { opacity: 0; pointer-events: none; }
 
   <div id="toast"></div>
 
-  <script>window.__HOLO_NO_VENDOR__ = true; window.__HOLO_BUILD__ = "2026-11-23T12:24:25.120Z";</script>
+  <script>window.__HOLO_NO_VENDOR__ = false; window.__HOLO_BUILD__ = "2026-11-23T15:38:58.910Z";</script>
 <script>
 /* 由 tools/bundle.mjs 生成 —— 不要手改，改源码后重新构建 */
 (function () {
@@ -816,6 +847,7 @@ const els = {
   mode: $('#mode'),
   fps: $('#fps'),
   morphInput: $('#morph-input'),
+  zodiacInput: $('#zodiac-input'),
   debug: $('#debug'),
   handDot: $('#hand-dot'),
   video: $('#cam-video'),
@@ -903,6 +935,7 @@ function startIntro() {
   document.body.classList.add('intro-on');
   els.loader.classList.add('hidden');
   toast('开场开始');
+  if (SKIP_INTRO) setTimeout(() => { if (intro) intro.done = true; }, 900);
 }
 
 function endIntro() {
@@ -922,6 +955,7 @@ function endIntro() {
   if (handoff) handoffToMainBody(camFrom);
   // 手机上「怎么玩」面板是收起的，开场结束后给一条一次性提示
   if (isTouchDevice) toast('点相框看大图 · 右上 ＋ 换照片');
+  runDemo();
 }
 
 // 闪屏之后不再切黑场：主场景先铺成散开态，再用 0.26s 收拢成主体。
@@ -1311,15 +1345,32 @@ let lastDebugAt = 0;
 // ---------------------------------------------------------------- 手势序列 → 粒子文字
 // 1 → 2 → 3 → 五指张开，触发粒子变形文字；3 秒内锁定交互
 // 手势仲裁：单独「1」停住 = 爱心；1→2→3→5 = 文字
-const stableCount = new StableCount({ windowMs: 150 });   // 手指数时域平滑，抗手机抖动
+let seqStallAt = 0;   // 序列卡住的起点（毫秒），用来在 HUD 上提示「需要 N 指」
+const stableCount = new StableCount({ windowMs: 90 });   // 窗口越短反应越快，手机上 150ms 太粘   // 手指数时域平滑，抗手机抖动
 
 const morphRouter = new GestureRouter([1, 2, 3, 5], {
-  holdMs: 70,   // 序列每步更快认，手机上不用刻意停
+  holdMs: 45,   // 序列每步更快认，手机上不用刻意停
   resetMs: 4000,
   cooldownMs: 1500,
+  // 这两条必须在 1 秒以上：低于它就抢在 1→2→3→5 前面触发爱心/生肖，序列永远走不完
+  // 800ms 是「手指停住」的门槛：只要手指数一直在变（走序列），这个计时会被重置
   heartHoldMs: 800,
+  zodiacHoldMs: 800,
 });
 let morphLockUntil = 0;
+
+// ?demo=heart|text|zodiac 自动触发一次形态变化，配合 tools/shot.mjs 做无头复现
+const QS = new URLSearchParams(location.search);
+const DEMO = QS.get('demo');
+const SKIP_INTRO = QS.get('skipintro') === '1';
+function runDemo() {
+  if (!DEMO) return;
+  setTimeout(() => {
+    if (DEMO === 'heart') triggerHeart();
+    else if (DEMO === 'zodiac') triggerZodiac();
+    else triggerMorph();
+  }, 800);
+}
 
 function fingerCountOf(out) {
   if (!out?.hand) return -1;
@@ -1332,7 +1383,7 @@ function triggerMorph() {
   closeCaptionModal();
   const text = (els.morphInput?.value || '').trim() || '圣诞快乐';
   if (!tree.showText(text)) return;
-  morphLockUntil = performance.now() + 3000;
+  morphLockUntil = performance.now() + 1200;
   toast(`✍️ ${text}`);
 }
 
@@ -1340,16 +1391,17 @@ function triggerMorph() {
 function triggerZodiac() {
   if (tree.focusedPhoto) closePhoto();
   closeCaptionModal();
-  const raw = (els.morphInput?.value || '').trim();
+  // 生肖有自己的输入框，和「文字」互不干扰
+  const raw = (els.zodiacInput?.value || '').trim();
   if (!raw) {
-    toast('✍️ 先在上面输入一个生肖：鼠 牛 虎 兔 龙 蛇 马 羊 猴 鸡 狗 猪');
+    toast('🐭 先在「生肖」输入框里填一个：鼠 牛 虎 兔 龙 蛇 马 羊 猴 鸡 狗 猪');
     return;
   }
   if (!tree.showZodiac(raw)) {
     toast('只认十二生肖：鼠 牛 虎 兔 龙 蛇 马 羊 猴 鸡 狗 猪');
     return;
   }
-  morphLockUntil = performance.now() + 3000;
+  morphLockUntil = performance.now() + 1200;
   toast(`✨ ${raw}`);
 }
 
@@ -1358,7 +1410,7 @@ function triggerHeart() {
   if (tree.focusedPhoto) closePhoto();
   closeCaptionModal();
   if (!tree.showHeart()) return;
-  morphLockUntil = performance.now() + 3000;
+  morphLockUntil = performance.now() + 1200;
   toast('❤️ 爱心');
 }
 
@@ -1370,6 +1422,13 @@ function feedMorphGesture(out, now) {
   const normalized = raw >= 4 ? 5 : raw;
   const count = stableCount.push(normalized, now);   // 先平滑再判序列
   if (count < 0) return;
+  // 卡住检测用这一帧平滑后的 count（不能引用 HUD 里的 shownCount —— 那是另一个作用域）
+  if (morphRouter.seq.step > 0 && count !== morphRouter.expectedCount()) {
+    if (!seqStallAt) seqStallAt = now;
+  } else {
+    seqStallAt = 0;
+  }
+
   const stepBefore = morphRouter.seq.step;
   const action = morphRouter.update(count, now);
   if (morphRouter.seq.step > stepBefore && morphRouter.seq.step < 4) {
@@ -1390,7 +1449,7 @@ const BASE_PR = Math.min(window.devicePixelRatio || 1, isTouchDevice ? 1.6 : 2);
 let rafGap = 16.7;        // 估测的屏幕刷新间隔
 let lastRafAt = 0;
 let renderFps = 60;
-let qualityScale = 1;
+const qualityScale = 1;   // 固定 100%：不做动态降分辨率
 let perfElapsed = 0;
 let perfFrames = 0;
 let lastFpsHudAt = 0;
@@ -1405,21 +1464,14 @@ function shouldRenderFrame(now) {
 
 function governFrameRate(dt) {
   renderFps += (1 / Math.max(dt, 1e-3) - renderFps) * 0.05;
-  if (intro) return;          // 开场用独立的 composer，先别动像素比，免得尺寸不同步
-  if (rafGap < 16) return;    // 高刷屏（>60Hz）是主动隔帧，不是性能不够，别再降画质
+  // 只统计，不再自动降画质：用户要求画面不允许被压缩。
+  // 帧率靠「关掉高分屏 MSAA」这类不损画质的手段来保。
+  if (intro) return;
   perfElapsed += dt;
   perfFrames++;
   if (perfElapsed < 1.2) return;
-  const fps = perfFrames / perfElapsed;
   perfElapsed = 0;
   perfFrames = 0;
-  if (fps < 50 && qualityScale > 0.7) {
-    qualityScale = Math.max(0.7, qualityScale - 0.1);
-    tree?.setPixelRatio(BASE_PR * qualityScale);
-  } else if (fps > 58 && qualityScale < 1) {
-    qualityScale = Math.min(1, qualityScale + 0.05);
-    tree?.setPixelRatio(BASE_PR * qualityScale);
-  }
 }
 
 function frame(now) {
@@ -1471,7 +1523,7 @@ function frame(now) {
     els.handDot.classList.remove('on');
     if (now - lastFpsHudAt > 500) {
       lastFpsHudAt = now;
-      els.fps.textContent = `${renderFps.toFixed(0)} fps · 画质 ${(qualityScale * 100).toFixed(0)}%`;
+      els.fps.textContent = `${renderFps.toFixed(0)} fps · ${(1000 / Math.max(renderFps, 1)).toFixed(1)} ms · 画质 ${(qualityScale * 100).toFixed(0)}%`;
     }
     return;
   }
@@ -1533,10 +1585,15 @@ function frame(now) {
   // HUD
   // 手势栏：0~4 根手指直接显示数字，5 根显示张开 —— 手机上能一眼看出识别对不对
   const shownCount = out.hand ? fingerCountOf(out) : -1;
+  // 诊断附注：四根手指的伸直判定 + 张开度，出问题时截一张图就能定位
+  const diag = out.hand
+    ? ` · [${out.hand.extended.map((e) => (e ? 1 : 0)).join('')}] · 张 ${out.openness.toFixed(2)}`
+    : '';
   let gestureText;
   if (shownCount === 5) gestureText = '🖐 张开';
   else if (shownCount >= 1 && shownCount <= 4) gestureText = `${'☝️✌️🤟🖖'[shownCount - 1]} ${shownCount} 指`;
   else gestureText = GESTURE_LABEL[out.gesture] ?? out.gesture;
+  gestureText += diag;
 
   // 按住「1」= 爱心、「2」= 生肖：显示进度，用户知道还要停多久
   const hold = morphRouter.holdProgress(shownCount, now);
@@ -1548,10 +1605,19 @@ function frame(now) {
   els.gesture.textContent = now < intentFlashUntil ? intentFlash : gestureText;
   const dirText = rig.spinDir > 0 ? '▶ 右转' : rig.spinDir < 0 ? '◀ 左转' : '自然自转';
   const seqStep = morphRouter.seq.step;
-  els.mode.textContent = `${rig.mode === MODE.TREE ? '合拢' : '散开'} · ${dirText}${seqStep > 0 ? ` · 👣 ${seqStep}/4` : ''}`;
+  let seqHint = '';
+  if (seqStep > 0) {
+    seqHint = ` · 👣 ${seqStep}/4`;
+    // 卡住超过 1.2 秒就把「它现在要几根手指」直接写出来，不用猜
+    const need = morphRouter.expectedCount();
+    if (need && shownCount !== need && now - (seqStallAt || 0) > 1200) {
+      seqHint += ` · 需要 ${need} 指`;
+    }
+  }
+  els.mode.textContent = `${rig.mode === MODE.TREE ? '合拢' : '散开'} · ${dirText}${seqHint}`;
   if (now - lastFpsHudAt > 500) {
     lastFpsHudAt = now;
-    els.fps.textContent = `${renderFps.toFixed(0)} fps · 画质 ${(qualityScale * 100).toFixed(0)}%`;
+    els.fps.textContent = `${renderFps.toFixed(0)} fps · ${(1000 / Math.max(renderFps, 1)).toFixed(1)} ms · 画质 ${(qualityScale * 100).toFixed(0)}%`;
   }
 
   if (debugOn && now - lastDebugAt > 100) {
@@ -1562,7 +1628,7 @@ function frame(now) {
           ? new Date(window.__HOLO_BUILD__).toLocaleString('zh-CN', { hour12: false })
           : 'dev'
       }`,
-      `画面 ${renderFps.toFixed(0)} fps · 画质 ${(qualityScale * 100).toFixed(0)}%`,
+      `画面 ${renderFps.toFixed(0)} fps · ${(1000 / Math.max(renderFps, 1)).toFixed(1)} ms · 画质 ${(qualityScale * 100).toFixed(0)}%`,
       `手势识别 ${fps} fps`,
       `张开度 ${out.openness.toFixed(2)}  (张开>${CONFIG.gesture.openOn} / 握拳<${CONFIG.gesture.fistOn})`,
       `捏合比 ${out.pinchRatio.toFixed(2)}  (捏合<${CONFIG.gesture.pinchOn})`,
@@ -2049,22 +2115,42 @@ function measureHand(lm) {
   const openness = tipSum / FINGER_TIPS.length / scale;
 
   // 单指是否伸直：指尖离手腕明显比第二关节远
-  // 伸直判据：① 指尖离手腕明显比第二关节远；② 第二关节处夹角够大（接近一条直线）。
-  // 只看距离的话，手机远景下手小、关键点抖，很容易把伸直判成蜷起。
+  // ---- 手掌坐标系：用掌面法向 + 掌心朝前方向判「伸直」----
+  // 2D 距离比在手机远景下会被手部朝向骗到（侧对镜头时伸直的手指看着很近），
+  // 换成 3D 的手掌坐标系后就与镜头角度无关了。
+  const P = (i) => lm[i] || { x: 0, y: 0, z: 0 };
+  const sub = (a, b) => ({ x: a.x - b.x, y: a.y - b.y, z: (a.z || 0) - (b.z || 0) });
+  const len = (v) => Math.hypot(v.x, v.y, v.z) || 1e-6;
+  const dot = (a, b) => a.x * b.x + a.y * b.y + a.z * b.z;
+  const norm = (v) => { const l = len(v); return { x: v.x / l, y: v.y / l, z: v.z / l }; };
+  const cross = (a, b) => ({
+    x: a.y * b.z - a.z * b.y,
+    y: a.z * b.x - a.x * b.z,
+    z: a.x * b.y - a.y * b.x,
+  });
+
+  // forward：掌心朝向（手腕 → 中指根）；normal：掌面法向（食指根 × 小指根）
+  const forward = norm(sub(P(9), P(0)));
+
   const extended = FINGERS.map(([mcp, pip, tip]) => {
-    const far = dist2d(lm[tip], wrist) > dist2d(lm[pip], wrist) * 1.12;
-    const a1 = lm[mcp];
-    const a2 = lm[pip];
-    const a3 = lm[tip];
-    const v1x = a1.x - a2.x;
-    const v1y = a1.y - a2.y;
-    const v2x = a3.x - a2.x;
-    const v2y = a3.y - a2.y;
-    const n1 = Math.hypot(v1x, v1y);
-    const n2 = Math.hypot(v2x, v2y);
-    const cos = n1 > 1e-6 && n2 > 1e-6 ? (v1x * v2x + v1y * v2y) / (n1 * n2) : 1;
-    const straight = cos < -0.82;   // 夹角 > ~145°
-    return far || straight;
+    const a = P(mcp);
+    const b = P(pip);
+    const c = P(tip);
+
+    // ① 3D 指节夹角（伸直 ≈ 180°，蜷起 < 120°）
+    const v1 = sub(a, b);
+    const v2 = sub(c, b);
+    const cos = dot(v1, v2) / (len(v1) * len(v2));
+    const straight = cos < -0.72;
+
+    // ② 指尖沿「掌心朝前」方向伸出多少（用指节长度归一化，与手大小无关）
+    const proj = dot(sub(c, a), forward);
+    const seg = len(sub(b, a));
+    const along = seg > 1e-6 ? proj / seg : 0;
+
+    // 必须「又直又伸」才认：只看距离会把蜷起的手指也算进来
+    // （用户比 1，中指蜷着但指尖离手腕更远 → 被判成 2 指，就是这个坑）
+    return straight && along > 0.85;
   });
 
   return {
@@ -2190,7 +2276,7 @@ class MorphSequence {
     holdMs = 130,
     resetMs = 4000,
     cooldownMs = 1500,
-    graceMs = 260,     // 手指切换时的中间态（1→2 中间闪过 3 之类）容许的宽限
+    graceMs = 400,     // 手指切换时的中间态（1→2 中间闪过 3 之类）容许的宽限
   } = {}) {
     this.seq = seq;
     this.holdMs = holdMs;
@@ -2204,6 +2290,13 @@ class MorphSequence {
     this.cooldownUntil = 0;
     this.graceMs = graceMs;
     this._mismatchAt = 0;
+    // 每一步允许的手指数集合：只放宽序列自己，不碰「1/2 停住」那两条判定
+    // idx2 = 比 3 时无名指/小指常被判错，容忍 4；idx3 = 张开，4 根也算
+    this.accept = seq.map((n, i) => {
+      if (i === seq.length - 1) return new Set([n, n - 1]);
+      if (i === 2 && n === 3) return new Set([3, 4]);
+      return new Set([n]);
+    });
   }
 
   /** 作废当前进度（比如这一下「1」被判成爱心了，不能再算序列第一步） */
@@ -2241,8 +2334,16 @@ class MorphSequence {
     if (count === 0) return false;
     if (now - this.stepAt > this.resetMs) this.step = 0;
 
-    const expected = this.seq[this.step];
-    if (count === expected) {
+    const ok = this.accept[this.step].has(count);
+    // 跳一级也算过：手换得太快，中间那种手指整帧被漏掉（1 直接到 3）
+    // 只有序列已经开跑（step>0）才允许跳级；
+    // 否则单比「2」会直接跳到第 3 步，把「比 2 = 生肖」这条判定顶掉。
+    const skip = !ok
+      && this.step > 0
+      && this.step + 1 < this.seq.length
+      && this.accept[this.step + 1].has(count);
+    if (ok || skip) {
+      if (skip) this.step += 1;
       this._mismatchAt = 0;
       this.step++;
       this.stepAt = now;
@@ -2300,6 +2401,8 @@ class GestureRouter {
     this.heartCooldownMs = heartCooldownMs;
     this.zodiacHoldMs = zodiacHoldMs;
     this.zodiacCooldownMs = zodiacCooldownMs;
+    this._lastChangeAt = 0; // 手指数最后变化的时间（换手指 = 正在走序列）
+    this._prevCount = -1;
     this._oneSince = -1;    // -1 = 还没开始按住（0 会被当成「假值」，踩过）
     this._heartUntil = 0;
     this._twoSince = -1;
@@ -2309,6 +2412,13 @@ class GestureRouter {
     this._suppressCount = -1;   // 刚触发爱心/生肖的那个手指数，改掉之前不再喂序列
   }
 
+  /** 序列当前等待的手指数（0 表示序列没在跑） */
+  expectedCount() {
+    if (this.seq.step <= 0) return 0;
+    const set = this.seq.accept[this.seq.step];
+    return set ? Math.min(...set) : 0;
+  }
+
   /**
    * 按住进度 0~1：HUD 上显示「❤️ 62%」，用户就知道还要停多久。
    * @param {number} count
@@ -2316,10 +2426,10 @@ class GestureRouter {
    */
   holdProgress(count, now) {
     if (count === 1 && this._oneSince >= 0 && this._armed) {
-      return Math.min(1, (now - this._oneSince) / this.heartHoldMs);
+      return Math.min(1, (now - Math.max(this._oneSince, this._lastChangeAt)) / this.heartHoldMs);
     }
     if (count === 2 && this._twoSince >= 0 && this._twoArmed && this.seq.step === 0) {
-      return Math.min(1, (now - this._twoSince) / this.zodiacHoldMs);
+      return Math.min(1, (now - Math.max(this._twoSince, this._lastChangeAt)) / this.zodiacHoldMs);
     }
     return 0;
   }
@@ -2350,6 +2460,12 @@ class GestureRouter {
       this._twoArmed = true;
     }
 
+    // 手指还在变，说明用户在走 1→2→3→5，这时候不该判爱心/生肖
+    if (count !== this._prevCount) {
+      this._prevCount = count;
+      this._lastChangeAt = now;
+    }
+
     // 刚用「1」/「2」触发过爱心/生肖：继续比同一根手指数不再喂序列，
     // 否则一直按着 1 会把序列的第一步重新登记上，接着比 2、3、张开就误触发文字。
     if (this._suppressCount === count) {
@@ -2364,7 +2480,8 @@ class GestureRouter {
     }
 
     // 只比「2」并停住 → 生肖（但 1→2 已经在走序列时不算）
-    const heldTwo = count === 2 && this._twoSince >= 0 && now - this._twoSince >= this.zodiacHoldMs;
+    const stillTwo = now - Math.max(this._twoSince, this._lastChangeAt) >= this.zodiacHoldMs;
+    const heldTwo = count === 2 && this._twoSince >= 0 && stillTwo;
     if (heldTwo && this._twoArmed && this.seq.step === 0 && now >= this._zodiacUntil) {
       this._zodiacUntil = now + this.zodiacCooldownMs;
       this._twoArmed = false;
@@ -2373,7 +2490,8 @@ class GestureRouter {
       return 'zodiac';
     }
 
-    const heldOne = count === 1 && this._oneSince >= 0 && now - this._oneSince >= this.heartHoldMs;
+    const stillOne = now - Math.max(this._oneSince, this._lastChangeAt) >= this.heartHoldMs;
+    const heldOne = count === 1 && this._oneSince >= 0 && stillOne;
     if (heldOne && this._armed && now >= this._heartUntil) {
       this._armed = false;
       this._heartUntil = now + this.heartCooldownMs;
@@ -2845,7 +2963,13 @@ class HoloTree {
   // ---------------------------------------------------------------- setup
 
   _initRenderer() {
-    this.renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
+    // 高分屏不要开 MSAA：像素比 2 时 4x MSAA 的开销非常大，而且视觉上看不出差别。
+    // 只在 1x（普通屏）时才开抗锯齿。
+    const dpr = window.devicePixelRatio || 1;
+    this.renderer = new THREE.WebGLRenderer({
+      antialias: dpr < 1.5,
+      powerPreference: 'high-performance',
+    });
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, this.cfg.quality.maxPixelRatio));
     this.renderer.setSize(window.innerWidth, window.innerHeight);
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
@@ -4557,7 +4681,10 @@ __exports["HoloTree"] = HoloTree;
  * 这里就会直接走 CDN，不会先撞一次 404。
  */
 
-const CDN_MP = 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.3/+esm';
+// 必须用官方 ESM 入口 vision_bundle.mjs：
+// jsdelivr 的 `+esm` 会重写内部地址，wasm 加载器拿不到 ModuleFactory，
+// 报「ModuleFactory not set」——单文件版（GitHub Pages / 隧道）就是这样彻底没手势的。
+const CDN_MP = 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.3/vision_bundle.mjs';
 
 // 用 document.baseURI 而不是 import.meta.url：打包成单文件（经典脚本）后
 // import.meta 是不存在的语法，直接用会让整个 bundle 解析失败。
@@ -4641,6 +4768,9 @@ class HandTracker {
       ? await this._loadMediapipe()
       : await import(CDN_MP);
     try {
+      // 单文件版没有 vendor 目录：直接走 CDN，不要先试本地路径。
+      // 先试本地会 404，FilesetResolver 拿到坏结果后会一直报 ModuleFactory not set。
+      if (!HAS_VENDOR) throw new Error('NO_VENDOR');
       this.landmarker = await this._createLandmarker(mp, LOCAL_WASM, LOCAL_MODEL);
     } catch (localErr) {
       console.warn('[hands] 本地模型不可用，尝试 CDN：', localErr);
