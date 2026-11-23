@@ -145,3 +145,30 @@ test('仲裁：没有手（-1）会清掉「1」的计时，手回来看见 1 �
   const b = feed(r, [{ count: -1, ms: 100 }, { count: 1, ms: 400 }], 30, a.t);
   assert.deepEqual(b.actions, [], '手消失前的 500ms 不能累加');
 });
+
+// ---------------------------------------------------------------- 手指数平滑
+
+import { StableCount } from '../js/gesture.js';
+
+test('平滑：单帧毛刺被众数吃掉（1 → 0 → 1 仍然是 1）', () => {
+  const s = new StableCount({ windowMs: 150 });
+  let out = -1;
+  const seq = [1, 1, 1, 1, 0, 1, 1, 1];
+  for (let i = 0; i < seq.length; i++) out = s.push(seq[i], i * 33);
+  assert.equal(out, 1);
+});
+
+test('平滑：真的切到 2 时，一个窗口内会跟上', () => {
+  const s = new StableCount({ windowMs: 150 });
+  for (let i = 0; i < 5; i++) s.push(1, i * 33);
+  let out = -1;
+  for (let i = 5; i < 12; i++) out = s.push(2, i * 33);
+  assert.equal(out, 2);
+});
+
+test('平滑：没有手（-1）立刻清空，不会残留旧手指数', () => {
+  const s = new StableCount({ windowMs: 150 });
+  for (let i = 0; i < 5; i++) s.push(3, i * 33);
+  assert.equal(s.push(-1, 200), -1);
+  assert.equal(s.push(1, 233), 1);
+});

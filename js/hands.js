@@ -64,6 +64,11 @@ export class HandTracker {
         baseOptions: { modelAssetPath: modelPath, delegate },
         runningMode: 'VIDEO',
         numHands: 1,
+        // 手机远景 + 手部运动模糊时默认 0.5 太严，手会一帧有、一帧没有；
+        // 放到 0.4 让跟踪更连续（代价是偶尔误检，但有 StableCount 兜着）
+        minHandDetectionConfidence: 0.4,
+        minHandPresenceConfidence: 0.4,
+        minTrackingConfidence: 0.4,
       });
 
     try {
@@ -103,8 +108,9 @@ export class HandTracker {
       video: {
         // 采集降到 480×360：CAM 预览本来就只有 160×120，识别精度几乎无感，
         // 但摄像头/ISP 和 MediaPipe 的负担明显下降
-        width: 480,
-        height: 360,
+        // 抬到 640×480：手机远景下手更大一点，关键点更稳（480×360 时手指容易糊成一团）
+        width: 640,
+        height: 480,
         // 默认 30fps（省电、降温）；检测到手之后 setHandActive(true) 会升到 60
         frameRate: { ideal: 30, max: 60 },
         facingMode: 'user',

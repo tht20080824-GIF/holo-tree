@@ -56,3 +56,35 @@ export function pointScale(viewportHeight, pixelRatio, fovDeg, worldSize = 0.12)
 export function ribbonPitch(height) {
   return (height * RIBBON_TOP_RATIO) / RIBBON_TURNS;
 }
+
+
+/**
+ * 自下而上「生长」的进度：1.5s 内 easeOutCubic 走完。
+ * 前段快（读得出窜上来），末段慢（收在塔尖下方）。
+ */
+export function ribbonRevealAt(t, dur = 1.5) {
+  const x = Math.min(1, Math.max(0, t / Math.max(1e-4, dur)));
+  const y = 1 - x;
+  return 1 - y * y * y;
+}
+
+/**
+ * 螺旋上弧长参数 s（0=树底，1=树顶）对应的点（treeRoot 局部坐标）。
+ * 爱心消散时，被卷进漩涡的那部分粒子就沿这条曲线爬升。
+ */
+export function ribbonPoint(s, {
+  floorY,
+  height,
+  baseRadius,
+  turns = RIBBON_TURNS,
+  rot = 0,
+} = {}) {
+  const t = Math.min(1, Math.max(0, s));
+  const ang = ribbonAngle(t, turns) + rot;
+  const r = ribbonRadius(t, baseRadius);
+  return {
+    x: Math.cos(ang) * r,
+    y: ribbonY(t, floorY, height),
+    z: Math.sin(ang) * r,
+  };
+}

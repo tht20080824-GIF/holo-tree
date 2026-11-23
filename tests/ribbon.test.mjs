@@ -12,6 +12,8 @@ import {
   ribbonAngle,
   ribbonPitch,
   pointScale,
+  ribbonRevealAt,
+  ribbonPoint,
 } from '../js/ribbon-math.js';
 import { CONFIG } from '../js/config.js';
 
@@ -79,4 +81,34 @@ test('光带：点尺寸在真实场景尺度下必须可见（≥2 像素）', 
   const sizePx = (1.0 * scale) / 40;
   assert.ok(sizePx >= 2, `光带粒子只有 ${sizePx.toFixed(2)} 像素，会看不见`);
   assert.ok(sizePx < 24, `光带粒子 ${sizePx.toFixed(2)} 像素，太粗了`);
+});
+
+test('光带生长：1.5 秒 easeOutCubic，前快后慢', () => {
+  assert.equal(ribbonRevealAt(0), 0);
+  assert.equal(ribbonRevealAt(1.5), 1);
+  assert.equal(ribbonRevealAt(3), 1);
+  const mid = ribbonRevealAt(0.6);
+  assert.ok(mid > 0.75 && mid < 0.85, `0.6s 应到 ~78%，实际 ${mid.toFixed(2)}`);
+  let prev = -1;
+  for (let t = 0; t <= 1.5; t += 0.05) {
+    const v = ribbonRevealAt(t);
+    assert.ok(v >= prev - 1e-9);
+    prev = v;
+  }
+});
+
+test('光带生长：0.6s 时已经走过七成（读得出「窜上来」）', () => {
+  assert.ok(ribbonRevealAt(0.6) > 0.7);
+  assert.ok(ribbonRevealAt(1.2) > 0.97, `1.2s 应基本到顶，实际 ${ribbonRevealAt(1.2).toFixed(3)}`);
+});
+
+test('光带路径：s=0 在树底、s=1 在树顶下方，半径随高度收小', () => {
+  const shape = { floorY: -12, height: 24, baseRadius: 9 };
+  const bottom = ribbonPoint(0, shape);
+  const top = ribbonPoint(1, shape);
+  assert.ok(Math.abs(bottom.y - shape.floorY) < 1e-6);
+  assert.ok(Math.abs(top.y - (shape.floorY + shape.height * RIBBON_TOP_RATIO)) < 1e-6);
+  const rBottom = Math.hypot(bottom.x, bottom.z);
+  const rTop = Math.hypot(top.x, top.z);
+  assert.ok(rBottom > rTop * 3, '底部半径应明显大于顶部');
 });

@@ -194,7 +194,23 @@ export function measureHand(lm) {
   const openness = tipSum / FINGER_TIPS.length / scale;
 
   // 单指是否伸直：指尖离手腕明显比第二关节远
-  const extended = FINGERS.map(([, pip, tip]) => dist2d(lm[tip], wrist) > dist2d(lm[pip], wrist) * 1.12);
+  // 伸直判据：① 指尖离手腕明显比第二关节远；② 第二关节处夹角够大（接近一条直线）。
+  // 只看距离的话，手机远景下手小、关键点抖，很容易把伸直判成蜷起。
+  const extended = FINGERS.map(([mcp, pip, tip]) => {
+    const far = dist2d(lm[tip], wrist) > dist2d(lm[pip], wrist) * 1.12;
+    const a1 = lm[mcp];
+    const a2 = lm[pip];
+    const a3 = lm[tip];
+    const v1x = a1.x - a2.x;
+    const v1y = a1.y - a2.y;
+    const v2x = a3.x - a2.x;
+    const v2y = a3.y - a2.y;
+    const n1 = Math.hypot(v1x, v1y);
+    const n2 = Math.hypot(v2x, v2y);
+    const cos = n1 > 1e-6 && n2 > 1e-6 ? (v1x * v2x + v1y * v2y) / (n1 * n2) : 1;
+    const straight = cos < -0.82;   // 夹角 > ~145°
+    return far || straight;
+  });
 
   return {
     present: true,
@@ -205,6 +221,8 @@ export function measureHand(lm) {
     pinchRatio,
     openness,
     extended,
+    // 直接给出「比了几根手指」：张开手掌优先按 5 根算
+    fingerCount: openness > 1.6 ? 5 : extended.filter(Boolean).length,
     landmarks: lm,
   };
 }
@@ -452,5 +470,51 @@ export class GestureRouter {
     }
 
     return 'none';
+  }
+}
+
+
+/**
+ * 手指数的时域平滑：窗口内取众数。
+ *
+ * 手机远景下 MediaPipe 的关键点会逐帧抖，某根手指时伸时蜷，
+ * 直接拿去喂序列会导致「1 还没站稳就跳回 0」，序列反复重来。
+ * 这里用一个 150ms 的滑窗取众数，单帧毛刺直接被吃掉。
+ */
+export class StableCount {
+  constructor({ windowMs = 150 } = {}) {
+    this.windowMs = windowMs;
+    this.buf = [];
+  }
+
+  reset() {
+    this.buf.length = 0;
+  }
+
+  /**
+   * @param {number} count 本帧数出来的手指数（-1 = 没有手）
+   * @param {number} now 毫秒
+   * @returns {number} 平滑后的手指数
+   */
+  push(count, now) {
+    if (count == null || count < 0) {
+      this.reset();
+      return -1;
+    }
+    this.buf.push({ count, now });
+    while (this.buf.length > 1 && now - this.buf[0].now > this.windowMs) this.buf.shift();
+
+    const tally = new Map();
+    for (const b of this.buf) tally.set(b.count, (tally.get(b.count) || 0) + 1);
+
+    let best = -1;
+    let bestN = -1;
+    for (const [c, n] of tally) {
+      if (n >= bestN) {          // 平票取最新的，变化时反应更快
+        bestN = n;
+        best = c;
+      }
+    }
+    return best;
   }
 }

@@ -31,6 +31,7 @@ import {
   smoothstep as dissolveSmooth,
 } from './heart-dissolve.js';
 import { createRibbon } from './ribbon.js';
+import { ribbonRevealAt, ribbonPoint, RIBBON_TURNS } from './ribbon-math.js';
 import { giftShape, bowShape, placeShape } from './ornament-shapes.js';
 import { placeOrnaments, makeScatterPoint } from './ornament-math.js';
 import { MODE } from './gesture.js';
@@ -491,6 +492,10 @@ export class HoloTree {
     this.treeRoot.add(this.ribbon.points);
 
     this._ribbonOpacity = 1; // 散开态时淡出
+    this._ribbonReveal = 1;  // 光带生长进度（0=没有，1=长到顶）
+    this._ribbonGrowing = false;
+    this._ribbonGrowT = 0;
+    this._starFlash = 0;
     this._camBlend = null;   // 开场交棒时的机位过渡
 
     // 接回流程锁：散开 → 聚合 这段不接受任何用户输入
@@ -1131,12 +1136,12 @@ export class HoloTree {
     const ok = this._morphToPoints(h.pts, h.minX, h.minY, h.maxX, h.maxY);
     if (!ok) return false;
     this.textKind = 'heart';
-    this._prepareDissolve();
+    this._prepareDissolve(true);
     return true;
   }
 
   /** 把平面坐标、分组、速度种子等都算好（文字 / 爱心通用），消散时直接用 */
-  _prepareDissolve() {
+  _prepareDissolve(withRibbon = false) {
     const n = this.textCount;
     const b = this._morphBasis;
     if (!b) return;
@@ -1160,6 +1165,22 @@ export class HoloTree {
     }
     this._heartMaxR = maxR || 1;
     this._heartCfg = null;
+
+    // 爱心的 30% 粒子改走「沿漩涡上升」：视觉因果是 散开 → 被卷进漩涡 → 树长出来
+    this._ribbonBound = null;
+    this._ribbonS = null;
+    if (withRibbon) {
+      const bound = new Uint8Array(n);
+      const arc = new Float32Array(n);
+      for (let i = 0; i < n; i++) {
+        if (i % 10 < 3) {
+          bound[i] = 1;
+          arc[i] = i / n;
+        }
+      }
+      this._ribbonBound = bound;
+      this._ribbonS = arc;
+    }
     this.heartState = createHeartDissolve(n, u, v, this._heartMaxR, Math.random);
   }
 
@@ -1364,6 +1385,11 @@ export class HoloTree {
     this.textActive = false;
     this.restoring = true;      // 从收到终止指令这一刻起，用户输入全部让路
 
+    // 光带同步开始「从地面往上长」：和消散重叠，中间不留空档
+    this._ribbonGrowing = true;
+    this._ribbonGrowT = 0;
+    this._ribbonReveal = 0;
+
     // 文字和爱心都走 3.2 秒的「丝带分流」消散。
     // 这段时间里树先停在散开态但保持透明 —— 消散完先露出散开的树，再收拢。
     if (this.heartState) {
@@ -1479,6 +1505,49 @@ export class HoloTree {
         r = Math.min(1, r + 0.5 * flick);
         g = Math.min(1, g + 0.28 * flick);
         bl = Math.min(1, bl + 0.08 * flick);
+      }
+
+      // 被漩涡接住的那 30%：沿螺旋爬升，颜色转白
+      if (this._ribbonBound && this._ribbonBound[i]) {
+        const sArc = this._ribbonS[i];
+        const climb = Math.min(1, Math.max(0, (t - HEART_DISSOLVE.startAt) / 1.3));
+        const e = 1 - Math.pow(1 - climb, 3);
+        const rp = ribbonPoint(sArc, {
+          floorY: this.cfg.particles.floorY,
+          height: this.cfg.particles.height,
+          baseRadius: this.cfg.particles.radius,
+          turns: RIBBON_TURNS,
+          rot: this.time * 0.12,
+        });
+        if (!this._ribbonTmp) this._ribbonTmp = new THREE.Vector3();
+        this._ribbonTmp.set(rp.x, rp.y, rp.z);
+        this.treeRoot.localToWorld(this._ribbonTmp);
+
+        const bx = c.x + rx * (st.u[i] * contract) + ux * (st.v[i] * contract);
+        const by = c.y + ry * (st.u[i] * contract) + uy * (st.v[i] * contract);
+        const bz = c.z + rz * (st.u[i] * contract) + uz * (st.v[i] * contract);
+
+        const v3r = i * 9;
+        pos[v3r] = bx + (this._ribbonTmp.x - bx) * e;
+        pos[v3r + 1] = by + (this._ribbonTmp.y - by) * e;
+        pos[v3r + 2] = bz + (this._ribbonTmp.z - bz) * e;
+
+        const wr = 1.0;
+        const wg = 0.97;
+        const wb = 0.88;
+        col[v3r] = r + (wr - r) * e;
+        col[v3r + 1] = g + (wg - g) * e;
+        col[v3r + 2] = bl + (wb - bl) * e;
+
+        const aRib = Math.max(0, 1 - Math.max(0, (t - 1.3) / 1.4));
+        alpha[i * 3] = aRib;
+        sizeArr[i * 3] = 0.045 * (0.95 - 0.25 * e);
+        for (let gI = 0; gI < 2; gI++) {
+          const v = i * 3 + gI + 1;
+          alpha[v] = 0;
+          sizeArr[v] = 0;
+        }
+        continue;
       }
 
       // 本体
@@ -1665,18 +1734,37 @@ export class HoloTree {
     }
 
     // 星星呼吸
-    const pulse = 3.9 + Math.sin(t * 1.8) * 0.45;
+    const pulse = 3.9 + Math.sin(t * 1.8) * 0.45 + this._starFlash * 2.4;
     this.star.scale.setScalar(pulse);
-    this.starLight.intensity = 40 + Math.sin(t * 1.8) * 12;
+    this.starLight.intensity = 40 + Math.sin(t * 1.8) * 12 + this._starFlash * 55;
 
     this._updateSnow(dt);
     this._updateBursts(dt);
     this._updateFocus(dt);
 
-    // 光带：树形态下常亮，散开后淡出，避免和爆炸的粒子糊成一团
-    const ribbonTarget = this.mode === MODE.TREE ? 1 : 0;
+    // 光带生长：1.5s easeOutCubic 从地面长到塔尖
+    if (this._ribbonGrowing) {
+      this._ribbonGrowT += dt;
+      this._ribbonReveal = ribbonRevealAt(this._ribbonGrowT);
+      if (this._ribbonReveal >= 1) {
+        this._ribbonGrowing = false;
+        this._starFlash = 1;      // 长到顶的同时点亮塔尖星芒
+      }
+    }
+    if (this._starFlash > 0.001) this._starFlash *= Math.exp(-2.2 * dt);
+    else this._starFlash = 0;
+
+    // 光带：树形态下常亮；生长期间强制可见（不然消散时它是透明的，等于没长）
+    const ribbonTarget = Math.max(this.mode === MODE.TREE ? 1 : 0, this._ribbonGrowing ? 1 : 0);
     this._ribbonOpacity += (ribbonTarget - this._ribbonOpacity) * (1 - Math.exp(-4 * dt));
-    this.ribbon.update(dt, this.camera, this.renderer.getPixelRatio(), this._ribbonOpacity);
+    this.ribbon.update(
+      dt,
+      this.camera,
+      this.renderer.getPixelRatio(),
+      this._ribbonOpacity,
+      this._ribbonReveal,
+      this._ribbonGrowing,
+    );
     this._updateOrnaments(dt, this.time);
 
     this.composer.render();

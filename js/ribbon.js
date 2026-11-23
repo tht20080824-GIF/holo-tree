@@ -36,6 +36,7 @@ const VERT = /* glsl */ `
   uniform float uFloorY;
   uniform float uBaseRadius;
   uniform float uPointScale;
+  uniform float uReveal;       // 0→1 自下而上生长
   uniform vec3  uCamPos;
   uniform vec3  uCenter;
   uniform vec3  uColorA;
@@ -72,7 +73,16 @@ const VERT = /* glsl */ `
     float facing = dot(toCam, fromCenter);           // 近侧 >0，远侧 <0
     float depthFactor = mix(0.6, 1.0, smoothstep(-0.55, 0.35, facing));
 
-    vAlpha = aBright * depthFactor;
+    // 生长：按静态弧长 aPhase 一刀切，s > uReveal 的粒子完全隐藏。
+    // 注意用 aPhase 而不是流动后的 phase —— 流动会让"刀口"在原地闪烁。
+    float s = aPhase;
+    float hide = smoothstep(uReveal - 0.02, uReveal + 0.02, s);
+    // 生长前沿提亮：正在冒出来的那一段最亮，成形后回落到基态
+    float growing = 1.0 - step(0.999, uReveal);
+    float edge = exp(-pow((uReveal - s) / 0.05, 2.0)) * growing;
+    float growBright = 1.0 + 1.2 * edge;
+
+    vAlpha = aBright * depthFactor * (1.0 - hide) * growBright;
     vColor = mix(uColorA, uColorB, aTint);
   }
 `;
@@ -161,6 +171,7 @@ export function createRibbon({
     uColorA: { value: new THREE.Color(colorA) },
     uColorB: { value: new THREE.Color(colorB) },
     uOpacity: { value: 1 },
+    uReveal: { value: 1 },
   };
 
   const material = new THREE.ShaderMaterial({
@@ -179,10 +190,19 @@ export function createRibbon({
   return {
     points,
     uniforms,
-    /** @param {number} dt @param {THREE.Camera} camera @param {number} pixelRatio */
-    update(dt, camera, pixelRatio = 1, opacity = 1) {
+    /**
+     * @param {number} dt
+     * @param {THREE.Camera} camera
+     * @param {number} pixelRatio
+     * @param {number} opacity
+     * @param {number} reveal 0→1 生长进度
+     * @param {boolean} frozen 生长期间冻结流动，刀口才不会原地闪
+     */
+    update(dt, camera, pixelRatio = 1, opacity = 1, reveal = 1, frozen = false) {
       uniforms.uTime.value += dt;
       uniforms.uOpacity.value = opacity;
+      uniforms.uReveal.value = reveal;
+      uniforms.uFlow.value = frozen ? 0 : 0.25;
       uniforms.uCamPos.value.copy(camera.position);
       uniforms.uPointScale.value = pointScale(window.innerHeight, pixelRatio, camera.fov);
     },

@@ -8,7 +8,7 @@
  */
 
 import { CONFIG } from './config.js';
-import { measureHand, GestureRecognizer, GestureIntent, GestureRouter, GESTURE, INTENT, MODE } from './gesture.js';
+import { measureHand, GestureRecognizer, GestureIntent, GestureRouter, StableCount, GESTURE, INTENT, MODE } from './gesture.js';
 import { Rig } from './controls.js';
 import { HoloTree } from './tree.js';
 import { HandTracker } from './hands.js';
@@ -559,8 +559,10 @@ let lastDebugAt = 0;
 // ---------------------------------------------------------------- 手势序列 → 粒子文字
 // 1 → 2 → 3 → 五指张开，触发粒子变形文字；3 秒内锁定交互
 // 手势仲裁：单独「1」停住 = 爱心；1→2→3→5 = 文字
+const stableCount = new StableCount({ windowMs: 150 });   // 手指数时域平滑，抗手机抖动
+
 const morphRouter = new GestureRouter([1, 2, 3, 5], {
-  holdMs: 130,
+  holdMs: 90,
   resetMs: 4000,
   cooldownMs: 1500,
   heartHoldMs: 800,
@@ -611,7 +613,8 @@ function triggerHeart() {
 function feedMorphGesture(out, now) {
   if (!tree || tree.textActive) return;
   if (now < morphLockUntil) return;
-  const count = fingerCountOf(out);
+  const raw = fingerCountOf(out);
+  const count = stableCount.push(raw, now);   // 先平滑再判序列
   if (count < 0) return;
   const action = morphRouter.update(count, now);
   if (action === 'text') triggerMorph();
