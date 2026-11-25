@@ -679,21 +679,43 @@ const BASE_PR = Math.min(window.devicePixelRatio || 1, isTouchDevice ? 1.6 : 2);
 let rafGap = 16.7;        // 估测的屏幕刷新间隔
 let lastRafAt = 0;
 let renderFps = 60;
+let costFps = 60;
+let renderCost = 0;
 const qualityScale = 1;   // 固定 100%：不做动态降分辨率
 let perfElapsed = 0;
 let perfFrames = 0;
 let lastFpsHudAt = 0;
 
+// 60fps 上限的节拍器。
+//
+// 旧写法 `now - lastTime >= 1000/61 - 1` 是「跑到才放行」，会跟着屏幕刷新
+// 周期抖动：60Hz 屏上 rAF 间隔在 16.6~16.9 之间飘，判定阈值卡在 15.4ms，
+// 于是有的帧放行、有的帧被吞，实测就是 40~50 之间来回跳。
+//
+// 改成累加式 deadline：每放行一帧就把 deadline 往后推一个周期，
+// 抖动被吸收进 deadline 里，输出节拍稳定；落后太多（>2 帧）时重置，
+// 避免长时间掉帧后疯狂补帧。
+const FRAME_INTERVAL = 1000 / 60;
+let nextFrameAt = 0;
+
 function shouldRenderFrame(now) {
   if (lastRafAt) rafGap += ((now - lastRafAt) - rafGap) * 0.1;
   lastRafAt = now;
-  // 统一 60fps 上限：不管是 120 / 90 / 144Hz，都隔到 60 这一档
-  // （90Hz 会落到 45、144Hz 会落到 48，这是 rAF 整数倍跳帧的物理限制）
-  return now - lastTime >= 1000 / 61 - 1;
+
+  if (!nextFrameAt) { nextFrameAt = now; return true; }
+  if (now < nextFrameAt) return false;
+
+  // 正常推进一个周期；落后超过 2 个周期说明卡了，直接对齐当前时刻
+  nextFrameAt += FRAME_INTERVAL;
+  if (now - nextFrameAt > FRAME_INTERVAL * 2) nextFrameAt = now + FRAME_INTERVAL;
+  return true;
 }
 
-function governFrameRate(dt) {
-  renderFps += (1 / Math.max(dt, 1e-3) - renderFps) * 0.05;
+function governFrameRate(dt, realGap) {
+  // 显示用真实间隔，动画用理想间隔：这样 HUD 不会因为你改了节拍器而说谎
+  renderFps += (1 / Math.max(realGap || dt, 1e-3) - renderFps) * 0.08;
+  // 渲染耗时也用同样的窗口统计，用来判断"是渲染慢还是屏幕慢"
+  if (renderCost > 0) costFps += (1000 / renderCost - costFps) * 0.08;
   // 只统计，不再自动降画质：用户要求画面不允许被压缩。
   // 帧率靠「关掉高分屏 MSAA」这类不损画质的手段来保。
   if (intro) return;
@@ -709,10 +731,13 @@ function frame(now) {
   if (document.hidden) { lastTime = now; return; }   // 后台不渲染，回来也不跳帧
   if (!shouldRenderFrame(now)) return;
 
-  // dt 上限 50ms：掉帧时也不会一步跳太远，但不会把 16 秒开场拖成慢动作
-  const dt = Math.min((now - lastTime) / 1000, 0.05);
+  // dt 用「节拍器理想间隔」而不是真实 now-lastTime：
+  // 真实间隔会带着 ±2ms 抖动，直接喂给动画会让运动看起来一顿一顿。
+  // 掉帧时（真实间隔 > 1.5 周期）才用真实值，让动画自然补上。
+  const realGap = (now - lastTime) / 1000;
+  const dt = Math.min(realGap > FRAME_INTERVAL * 1.5 / 1000 ? realGap : FRAME_INTERVAL / 1000, 0.05);
   lastTime = now;
-  governFrameRate(dt);
+  governFrameRate(dt, realGap);
 
   if (now - handSeenAt > 400) latestHand = null; // 手离开画面一段时间就当作没手
 
@@ -753,7 +778,7 @@ function frame(now) {
     els.handDot.classList.remove('on');
     if (now - lastFpsHudAt > 500) {
       lastFpsHudAt = now;
-      els.fps.textContent = `${renderFps.toFixed(0)} fps · ${(1000 / Math.max(renderFps, 1)).toFixed(1)} ms · 画质 ${(qualityScale * 100).toFixed(0)}%`;
+      els.fps.textContent = `${renderFps.toFixed(0)} fps · 渲染 ${renderCost.toFixed(1)} ms · 画质 ${(qualityScale * 100).toFixed(0)}%`;
     }
     return;
   }
@@ -801,6 +826,7 @@ function frame(now) {
 
   rig.update(dt, out.hand);
   tree.update(dt, rig);
+  renderCost = tree.lastRenderCost || 0;
 
   // 画面上的手部指示点
   if (out.hand) {
@@ -858,7 +884,7 @@ function frame(now) {
           ? new Date(window.__HOLO_BUILD__).toLocaleString('zh-CN', { hour12: false })
           : 'dev'
       }`,
-      `画面 ${renderFps.toFixed(0)} fps · ${(1000 / Math.max(renderFps, 1)).toFixed(1)} ms · 画质 ${(qualityScale * 100).toFixed(0)}%`,
+      `画面 ${renderFps.toFixed(0)} fps · 渲染 ${renderCost.toFixed(1)} ms · 画质 ${(qualityScale * 100).toFixed(0)}%`,
       `手势识别 ${fps} fps`,
       `张开度 ${out.openness.toFixed(2)}  (张开>${CONFIG.gesture.openOn} / 握拳<${CONFIG.gesture.fistOn})`,
       `捏合比 ${out.pinchRatio.toFixed(2)}  (捏合<${CONFIG.gesture.pinchOn})`,

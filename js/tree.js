@@ -1076,7 +1076,11 @@ export class HoloTree {
     this.composer.addPass(new RenderPass(this.scene, this.camera));
 
     const { strength, radius, threshold } = this.cfg.quality.bloom;
-    this.bloom = new UnrealBloomPass(new THREE.Vector2(size.x, size.y), strength, radius, threshold);
+    // bloom 在半分辨率下算：它是模糊效果，降采样后视觉差别极小，
+    // 但 4 个 downsample mip 的采样开销直接降到约 1/4 —— 这是掉帧的主因。
+    const bw = Math.max(1, Math.round(size.x * 0.5));
+    const bh = Math.max(1, Math.round(size.y * 0.5));
+    this.bloom = new UnrealBloomPass(new THREE.Vector2(bw, bh), strength, radius, threshold);
     this.composer.addPass(this.bloom);
     this.composer.addPass(new OutputPass());
   }
@@ -1773,7 +1777,10 @@ export class HoloTree {
     );
     this._updateOrnaments(dt, this.time);
 
+    const __t0 = performance.now();
     this.composer.render();
+    // 渲染耗时：main 用它区分「渲染慢」和「屏幕慢」，也是自适应降级的依据
+    this.lastRenderCost = performance.now() - __t0;
   }
 
   _updateParticles(dt, t) {
@@ -1845,6 +1852,17 @@ export class HoloTree {
     this.renderer.setPixelRatio(target);
     this.renderer.setSize(window.innerWidth, window.innerHeight);
     this.composer.setSize(window.innerWidth, window.innerHeight);
+    this._syncBloomSize();
+  }
+
+  /** bloom 跟着主画布走，但始终只用一半分辨率 */
+  _syncBloomSize() {
+    if (!this.bloom) return;
+    const size = this.renderer.getSize(new THREE.Vector2());
+    this.bloom.setSize(
+      Math.max(1, Math.round(size.x * 0.5)),
+      Math.max(1, Math.round(size.y * 0.5)),
+    );
   }
 
   resize() {
@@ -1854,6 +1872,7 @@ export class HoloTree {
     this.camera.updateProjectionMatrix();
     this.renderer.setSize(w, h);
     this.composer.setSize(w, h);
+    this._syncBloomSize();
     if (this.heartMaterial) {
       this.heartMaterial.uniforms.uScale.value = h * 0.5;
       this.heartMaterial.uniforms.uPixelRatio.value = this.renderer.getPixelRatio();
