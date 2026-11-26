@@ -372,7 +372,7 @@ function onHand(landmarks) {
 
 function statusText(code) {
   const map = {
-    'loading-model': '加载手势模型…',
+    'loading-model': '加载手势模型…（首次约 16MB，之后走本地缓存）',
     'loading-model-cdn': '本地模型缺失，改用 CDN…',
     'requesting-camera': '等待摄像头授权…',
     'camera-ready': '摄像头就绪 · 正在加载手势模型…',

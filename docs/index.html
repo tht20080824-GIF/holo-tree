@@ -757,7 +757,7 @@ body.ui-hidden #debug { opacity: 0; pointer-events: none; }
 
   <div id="toast"></div>
 
-  <script>window.__HOLO_NO_VENDOR__ = false; window.__HOLO_BUILD__ = "2026-11-26T13:10:10.699Z";</script>
+  <script>window.__HOLO_NO_VENDOR__ = false; window.__HOLO_BUILD__ = "2026-11-26T13:26:58.688Z";</script>
 <script>
 /* 由 tools/bundle.mjs 生成 —— 不要手改，改源码后重新构建 */
 (function () {
@@ -1144,7 +1144,7 @@ function onHand(landmarks) {
 
 function statusText(code) {
   const map = {
-    'loading-model': '加载手势模型…',
+    'loading-model': '加载手势模型…（首次约 16MB，之后走本地缓存）',
     'loading-model-cdn': '本地模型缺失，改用 CDN…',
     'requesting-camera': '等待摄像头授权…',
     'camera-ready': '摄像头就绪 · 正在加载手势模型…',
@@ -4782,6 +4782,45 @@ const CDN_WASM = 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.3/wa
 const CDN_MODEL =
   'https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task';
 
+/** 极简 IndexedDB 封装：只存 Blob/ArrayBuffer，够用就行 */
+const IDB_NAME = 'holo-cache';
+const IDB_STORE = 'files';
+
+function idbOpen() {
+  return new Promise((resolve, reject) => {
+    const req = indexedDB.open(IDB_NAME, 1);
+    req.onupgradeneeded = () => {
+      if (!req.result.objectStoreNames.contains(IDB_STORE)) req.result.createObjectStore(IDB_STORE);
+    };
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
+}
+
+async function idbGet(key) {
+  const db = await idbOpen();
+  try {
+    return await new Promise((resolve, reject) => {
+      const tx = db.transaction(IDB_STORE, 'readonly');
+      const req = tx.objectStore(IDB_STORE).get(key);
+      req.onsuccess = () => resolve(req.result || null);
+      req.onerror = () => reject(req.error);
+    });
+  } finally { db.close(); }
+}
+
+async function idbPut(key, value) {
+  const db = await idbOpen();
+  try {
+    await new Promise((resolve, reject) => {
+      const tx = db.transaction(IDB_STORE, 'readwrite');
+      tx.objectStore(IDB_STORE).put(value, key);
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+    });
+  } finally { db.close(); }
+}
+
 class HandTracker {
   constructor({ video, onHand, onStatus = () => {}, onFps = () => {}, onCameraReady = () => {} }) {
     this.video = video;
@@ -4814,31 +4853,88 @@ class HandTracker {
   }
 
   /**
-   * 预先抓模型字节。原来 model 是在 wasm 加载完之后才开始下的，
-   * 8.6MB 串在 wasm 后面，慢机型能卡十几秒。
-   * 现在两个请求并行，总耗时从 A+B 变成 max(A,B)。
+   * 模型字节：先查 IndexedDB，命中就零网络；没有才下载并存进去。
+   *
+   * 为什么要 IDB：GitHub Pages 给的是 cache-control: max-age=600，
+   * 十分钟后浏览器就把 7.5MB 模型丢了，下次进来还得重下。
+   * 存进 IDB 之后是永久缓存，第二次开始模型加载几乎是 0 秒。
+   *
+   * 只缓存字节，不改任何模型参数 —— 对手势判断零影响。
    */
-  _prefetchModel(url) {
-    if (!this._modelPromise) {
-      this._modelPromise = fetch(url, { cache: 'force-cache' })
-        .then((r) => {
-          if (!r.ok) throw new Error(`model ${r.status}`);
-          return r.arrayBuffer();
-        })
-        .catch((err) => {
-          console.warn('[hands] 模型预取失败，退回流式加载：', err);
-          return null;
-        });
+  async _loadModelBytes(url) {
+    const KEY = 'holo-hand-model-v1';
+
+    try {
+      const cached = await idbGet(KEY);
+      if (cached && cached.byteLength > 1e6) {
+        console.info('[hands] 模型命中本地缓存', (cached.byteLength / 1048576).toFixed(1), 'MB');
+        return cached;
+      }
+    } catch (err) {
+      console.warn('[hands] 读本地模型缓存失败：', err);
     }
-    return this._modelPromise;
+
+    const res = await fetch(url, { cache: 'force-cache' });
+    if (!res.ok) throw new Error(`model ${res.status}`);
+    const buf = await res.arrayBuffer();
+    try { await idbPut(KEY, buf); } catch (err) { console.warn('[hands] 写模型缓存失败：', err); }
+    return buf;
+  }
+
+  /**
+   * wasm 也走 IDB 缓存。
+   * FilesetResolver.forVisionTasks(dir) 只返回 {wasmLoaderPath, wasmBinaryPath}，
+   * 拿到后直接换成 blob URL 就行 —— 不用造什么假目录。
+   * 这样 8.3MB 的 wasm 第二次开始是本地读取，零网络。
+   */
+  async _filesetWithCache(mp, wasmPath) {
+    const { FilesetResolver } = mp;
+    const base = wasmPath.replace(/\/?$/, '/');
+    const fileset = await FilesetResolver.forVisionTasks(base);
+
+    const JS_KEY = 'holo-vision-wasm-js-v1';
+    const BIN_KEY = 'holo-vision-wasm-bin-v1';
+
+    const [cachedJs, cachedBin] = await Promise.all([
+      idbGet(JS_KEY).catch(() => null),
+      idbGet(BIN_KEY).catch(() => null),
+    ]);
+
+    if (cachedJs && cachedBin) {
+      console.info('[hands] wasm 命中本地缓存');
+      fileset.wasmLoaderPath = URL.createObjectURL(new Blob([cachedJs], { type: 'text/javascript' }));
+      fileset.wasmBinaryPath = URL.createObjectURL(new Blob([cachedBin], { type: 'application/wasm' }));
+      return fileset;
+    }
+
+    // 未命中：后台悄悄下载并存入 IDB，这次仍用网络路径
+    (async () => {
+      try {
+        const [jsRes, binRes] = await Promise.all([
+          fetch(fileset.wasmLoaderPath),
+          fetch(fileset.wasmBinaryPath),
+        ]);
+        if (!jsRes.ok || !binRes.ok) return;
+        const [jsBuf, binBuf] = await Promise.all([jsRes.arrayBuffer(), binRes.arrayBuffer()]);
+        await Promise.all([idbPut(JS_KEY, jsBuf), idbPut(BIN_KEY, binBuf)]);
+        console.info('[hands] wasm 已写入本地缓存');
+      } catch (err) {
+        console.warn('[hands] wasm 缓存写入失败：', err);
+      }
+    })();
+
+    return fileset;
   }
 
   async _createLandmarker(mp, wasmPath, modelPath) {
-    const { FilesetResolver, HandLandmarker } = mp;
+    const { HandLandmarker } = mp;
     // 并行：wasm 解析 和 模型下载 同时进行
     const [fileset, modelBuffer] = await Promise.all([
-      FilesetResolver.forVisionTasks(wasmPath),
-      this._prefetchModel(modelPath),
+      this._filesetWithCache(mp, wasmPath),
+      this._modelPromise || (this._modelPromise = this._loadModelBytes(modelPath).catch((err) => {
+        console.warn('[hands] 模型加载失败，退回流式：', err);
+        return null;
+      })),
     ]);
     const make = (delegate) =>
       HandLandmarker.createFromOptions(fileset, {
@@ -4947,7 +5043,9 @@ class HandTracker {
     addHint(new URL('vision_wasm_internal.js', LOCAL_WASM + '/').href, 'script');
 
     // 模型已经有并行预取，这里只提前点火
-    this._prefetchModel(LOCAL_MODEL);
+    if (!this._modelPromise) {
+      this._modelPromise = this._loadModelBytes(LOCAL_MODEL).catch(() => null);
+    }
   }
 
   /** 有手 → 60fps；手离开 2 秒 → 退回 30fps（摄像头和识别一起降，直接降温） */
