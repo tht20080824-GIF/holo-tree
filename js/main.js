@@ -156,6 +156,8 @@ if (CONFIG.intro.enabled) {
 
 function startIntro() {
   if (!intro || introStarted) return;
+  // 开场这十几秒用来预热手势模型，用户点「启用摄像头」时就是本地缓存了
+  try { tracker.warmup(); } catch (e) { console.warn('[main] warmup 失败：', e); }
   closeCaptionModal();
   introStarted = true;
   introHoldStart = 0;
@@ -681,7 +683,6 @@ let lastRafAt = 0;
 let renderFps = 60;
 let costFps = 60;
 let renderCost = 0;
-const qualityScale = 1;   // 固定 100%：不做动态降分辨率
 let perfElapsed = 0;
 let perfFrames = 0;
 let lastFpsHudAt = 0;
@@ -711,19 +712,54 @@ function shouldRenderFrame(now) {
   return true;
 }
 
-function governFrameRate(dt, realGap) {
-  // 显示用真实间隔，动画用理想间隔：这样 HUD 不会因为你改了节拍器而说谎
-  renderFps += (1 / Math.max(realGap || dt, 1e-3) - renderFps) * 0.08;
-  // 渲染耗时也用同样的窗口统计，用来判断"是渲染慢还是屏幕慢"
-  if (renderCost > 0) costFps += (1000 / renderCost - costFps) * 0.08;
-  // 只统计，不再自动降画质：用户要求画面不允许被压缩。
-  // 帧率靠「关掉高分屏 MSAA」这类不损画质的手段来保。
-  if (intro) return;
+// 自适应分辨率：渲染慢了就降像素比，快了再慢慢加回来。
+// 为什么只动像素比：粒子数、bloom、光照、配色全都不变，
+// 降的只是内部渲染分辨率——肉眼上主要感知是边缘略软，玩法零影响。
+let adaptivePR = null;      // 当前生效的像素比
+let prCeil = 1;             // 上限（等于初始 BASE_PR）
+let prFloor = 0.75;         // 下限，再低就明显糊了
+let slowRounds = 0;
+let fastRounds = 0;
+
+function adoptAdaptiveResolution(dt) {
+  if (intro || !tree) return;
   perfElapsed += dt;
   perfFrames++;
   if (perfElapsed < 1.2) return;
   perfElapsed = 0;
   perfFrames = 0;
+
+  // 用平均渲染耗时判断，比帧率更准（帧率还受屏幕和浏览器节流影响）
+  const cost = renderCost;
+  if (!cost) return;
+  if (adaptivePR == null) { adaptivePR = tree.renderer.getPixelRatio(); prCeil = adaptivePR; }
+
+  if (cost > 16) {
+    slowRounds++; fastRounds = 0;
+    if (slowRounds >= 2 && adaptivePR > prFloor) {
+      adaptivePR = Math.max(prFloor, adaptivePR - 0.15);
+      tree.setPixelRatio(adaptivePR);
+      slowRounds = 0;
+    }
+  } else if (cost < 11) {
+    fastRounds++; slowRounds = 0;
+    if (fastRounds >= 4 && adaptivePR < prCeil) {
+      adaptivePR = Math.min(prCeil, adaptivePR + 0.1);
+      tree.setPixelRatio(adaptivePR);
+      fastRounds = 0;
+    }
+  } else {
+    slowRounds = 0; fastRounds = 0;
+  }
+}
+
+function governFrameRate(dt, realGap) {
+  // 显示用真实间隔，动画用理想间隔：这样 HUD 不会因为你改了节拍器而说谎
+  renderFps += (1 / Math.max(realGap || dt, 1e-3) - renderFps) * 0.08;
+  // 渲染耗时也用同样的窗口统计，用来判断"是渲染慢还是屏幕慢"
+  if (renderCost > 0) costFps += (1000 / renderCost - costFps) * 0.08;
+  if (intro) return;
+  adoptAdaptiveResolution(dt);
 }
 
 function frame(now) {
@@ -778,7 +814,7 @@ function frame(now) {
     els.handDot.classList.remove('on');
     if (now - lastFpsHudAt > 500) {
       lastFpsHudAt = now;
-      els.fps.textContent = `${renderFps.toFixed(0)} fps · 渲染 ${renderCost.toFixed(1)} ms · 画质 ${(qualityScale * 100).toFixed(0)}%`;
+      els.fps.textContent = `${renderFps.toFixed(0)} fps · 渲染 ${renderCost.toFixed(1)} ms · 画质 ${Math.round((adaptivePR ?? BASE_PR) / BASE_PR * 100)}%`;
     }
     return;
   }
@@ -873,7 +909,7 @@ function frame(now) {
   els.mode.textContent = `${rig.mode === MODE.TREE ? '合拢' : '散开'} · ${dirText}${seqHint}`;
   if (now - lastFpsHudAt > 500) {
     lastFpsHudAt = now;
-    els.fps.textContent = `${renderFps.toFixed(0)} fps · ${(1000 / Math.max(renderFps, 1)).toFixed(1)} ms · 画质 ${(qualityScale * 100).toFixed(0)}%`;
+    els.fps.textContent = `${renderFps.toFixed(0)} fps · 渲染 ${renderCost.toFixed(1)} ms · 画质 ${Math.round((adaptivePR ?? BASE_PR) / BASE_PR * 100)}%`;
   }
 
   if (debugOn && now - lastDebugAt > 100) {
@@ -884,7 +920,7 @@ function frame(now) {
           ? new Date(window.__HOLO_BUILD__).toLocaleString('zh-CN', { hour12: false })
           : 'dev'
       }`,
-      `画面 ${renderFps.toFixed(0)} fps · 渲染 ${renderCost.toFixed(1)} ms · 画质 ${(qualityScale * 100).toFixed(0)}%`,
+      `画面 ${renderFps.toFixed(0)} fps · 渲染 ${renderCost.toFixed(1)} ms · 画质 ${Math.round((adaptivePR ?? BASE_PR) / BASE_PR * 100)}%`,
       `手势识别 ${fps} fps`,
       `张开度 ${out.openness.toFixed(2)}  (张开>${CONFIG.gesture.openOn} / 握拳<${CONFIG.gesture.fistOn})`,
       `捏合比 ${out.pinchRatio.toFixed(2)}  (捏合<${CONFIG.gesture.pinchOn})`,

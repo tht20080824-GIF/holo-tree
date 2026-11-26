@@ -60,12 +60,39 @@ export class HandTracker {
     }
   }
 
+  /**
+   * 预先抓模型字节。原来 model 是在 wasm 加载完之后才开始下的，
+   * 8.6MB 串在 wasm 后面，慢机型能卡十几秒。
+   * 现在两个请求并行，总耗时从 A+B 变成 max(A,B)。
+   */
+  _prefetchModel(url) {
+    if (!this._modelPromise) {
+      this._modelPromise = fetch(url, { cache: 'force-cache' })
+        .then((r) => {
+          if (!r.ok) throw new Error(`model ${r.status}`);
+          return r.arrayBuffer();
+        })
+        .catch((err) => {
+          console.warn('[hands] 模型预取失败，退回流式加载：', err);
+          return null;
+        });
+    }
+    return this._modelPromise;
+  }
+
   async _createLandmarker(mp, wasmPath, modelPath) {
     const { FilesetResolver, HandLandmarker } = mp;
-    const fileset = await FilesetResolver.forVisionTasks(wasmPath);
+    // 并行：wasm 解析 和 模型下载 同时进行
+    const [fileset, modelBuffer] = await Promise.all([
+      FilesetResolver.forVisionTasks(wasmPath),
+      this._prefetchModel(modelPath),
+    ]);
     const make = (delegate) =>
       HandLandmarker.createFromOptions(fileset, {
-        baseOptions: { modelAssetPath: modelPath, delegate },
+        // 有预取到的字节就直接喂 buffer，省掉第二次网络往返
+        baseOptions: modelBuffer
+          ? { modelAssetBuffer: new Uint8Array(modelBuffer), delegate }
+          : { modelAssetPath: modelPath, delegate },
         runningMode: 'VIDEO',
         numHands: 1,
         // 手机远景 + 手部运动模糊时默认 0.5 太严，手会一帧有、一帧没有；
@@ -141,6 +168,33 @@ export class HandTracker {
     }
     this.running = true;
     this._tick();
+  }
+
+  /**
+   * 预热：用户看开场动画的那十几秒，把 wasm 和模型先下进 HTTP 缓存。
+   * 等他点「启用摄像头」时这两个已经是本地缓存，几乎瞬开。
+   * 失败无所谓，真加载时会重试。
+   */
+  warmup() {
+    if (!HAS_VENDOR || this._warmed) return;
+    this._warmed = true;
+
+    // wasm 用 <link rel=prefetch> 走浏览器最低优先级，不抢首屏带宽
+    const addHint = (href, as) => {
+      if (document.querySelector(`link[data-warm="${href}"]`)) return;
+      const l = document.createElement('link');
+      l.rel = 'prefetch';
+      l.as = as;
+      l.href = href;
+      l.dataset.warm = href;
+      l.crossOrigin = 'anonymous';
+      document.head.appendChild(l);
+    };
+    addHint(new URL('vision_wasm_internal.wasm', LOCAL_WASM + '/').href, 'fetch');
+    addHint(new URL('vision_wasm_internal.js', LOCAL_WASM + '/').href, 'script');
+
+    // 模型已经有并行预取，这里只提前点火
+    this._prefetchModel(LOCAL_MODEL);
   }
 
   /** 有手 → 60fps；手离开 2 秒 → 退回 30fps（摄像头和识别一起降，直接降温） */

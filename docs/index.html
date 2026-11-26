@@ -757,7 +757,7 @@ body.ui-hidden #debug { opacity: 0; pointer-events: none; }
 
   <div id="toast"></div>
 
-  <script>window.__HOLO_NO_VENDOR__ = false; window.__HOLO_BUILD__ = "2026-11-25T13:29:20.536Z";</script>
+  <script>window.__HOLO_NO_VENDOR__ = false; window.__HOLO_BUILD__ = "2026-11-26T13:10:10.699Z";</script>
 <script>
 /* 由 tools/bundle.mjs 生成 —— 不要手改，改源码后重新构建 */
 (function () {
@@ -928,6 +928,8 @@ if (CONFIG.intro.enabled) {
 
 function startIntro() {
   if (!intro || introStarted) return;
+  // 开场这十几秒用来预热手势模型，用户点「启用摄像头」时就是本地缓存了
+  try { tracker.warmup(); } catch (e) { console.warn('[main] warmup 失败：', e); }
   closeCaptionModal();
   introStarted = true;
   introHoldStart = 0;
@@ -1453,7 +1455,6 @@ let lastRafAt = 0;
 let renderFps = 60;
 let costFps = 60;
 let renderCost = 0;
-const qualityScale = 1;   // 固定 100%：不做动态降分辨率
 let perfElapsed = 0;
 let perfFrames = 0;
 let lastFpsHudAt = 0;
@@ -1483,19 +1484,54 @@ function shouldRenderFrame(now) {
   return true;
 }
 
-function governFrameRate(dt, realGap) {
-  // 显示用真实间隔，动画用理想间隔：这样 HUD 不会因为你改了节拍器而说谎
-  renderFps += (1 / Math.max(realGap || dt, 1e-3) - renderFps) * 0.08;
-  // 渲染耗时也用同样的窗口统计，用来判断"是渲染慢还是屏幕慢"
-  if (renderCost > 0) costFps += (1000 / renderCost - costFps) * 0.08;
-  // 只统计，不再自动降画质：用户要求画面不允许被压缩。
-  // 帧率靠「关掉高分屏 MSAA」这类不损画质的手段来保。
-  if (intro) return;
+// 自适应分辨率：渲染慢了就降像素比，快了再慢慢加回来。
+// 为什么只动像素比：粒子数、bloom、光照、配色全都不变，
+// 降的只是内部渲染分辨率——肉眼上主要感知是边缘略软，玩法零影响。
+let adaptivePR = null;      // 当前生效的像素比
+let prCeil = 1;             // 上限（等于初始 BASE_PR）
+let prFloor = 0.75;         // 下限，再低就明显糊了
+let slowRounds = 0;
+let fastRounds = 0;
+
+function adoptAdaptiveResolution(dt) {
+  if (intro || !tree) return;
   perfElapsed += dt;
   perfFrames++;
   if (perfElapsed < 1.2) return;
   perfElapsed = 0;
   perfFrames = 0;
+
+  // 用平均渲染耗时判断，比帧率更准（帧率还受屏幕和浏览器节流影响）
+  const cost = renderCost;
+  if (!cost) return;
+  if (adaptivePR == null) { adaptivePR = tree.renderer.getPixelRatio(); prCeil = adaptivePR; }
+
+  if (cost > 16) {
+    slowRounds++; fastRounds = 0;
+    if (slowRounds >= 2 && adaptivePR > prFloor) {
+      adaptivePR = Math.max(prFloor, adaptivePR - 0.15);
+      tree.setPixelRatio(adaptivePR);
+      slowRounds = 0;
+    }
+  } else if (cost < 11) {
+    fastRounds++; slowRounds = 0;
+    if (fastRounds >= 4 && adaptivePR < prCeil) {
+      adaptivePR = Math.min(prCeil, adaptivePR + 0.1);
+      tree.setPixelRatio(adaptivePR);
+      fastRounds = 0;
+    }
+  } else {
+    slowRounds = 0; fastRounds = 0;
+  }
+}
+
+function governFrameRate(dt, realGap) {
+  // 显示用真实间隔，动画用理想间隔：这样 HUD 不会因为你改了节拍器而说谎
+  renderFps += (1 / Math.max(realGap || dt, 1e-3) - renderFps) * 0.08;
+  // 渲染耗时也用同样的窗口统计，用来判断"是渲染慢还是屏幕慢"
+  if (renderCost > 0) costFps += (1000 / renderCost - costFps) * 0.08;
+  if (intro) return;
+  adoptAdaptiveResolution(dt);
 }
 
 function frame(now) {
@@ -1550,7 +1586,7 @@ function frame(now) {
     els.handDot.classList.remove('on');
     if (now - lastFpsHudAt > 500) {
       lastFpsHudAt = now;
-      els.fps.textContent = `${renderFps.toFixed(0)} fps · 渲染 ${renderCost.toFixed(1)} ms · 画质 ${(qualityScale * 100).toFixed(0)}%`;
+      els.fps.textContent = `${renderFps.toFixed(0)} fps · 渲染 ${renderCost.toFixed(1)} ms · 画质 ${Math.round((adaptivePR ?? BASE_PR) / BASE_PR * 100)}%`;
     }
     return;
   }
@@ -1645,7 +1681,7 @@ function frame(now) {
   els.mode.textContent = `${rig.mode === MODE.TREE ? '合拢' : '散开'} · ${dirText}${seqHint}`;
   if (now - lastFpsHudAt > 500) {
     lastFpsHudAt = now;
-    els.fps.textContent = `${renderFps.toFixed(0)} fps · ${(1000 / Math.max(renderFps, 1)).toFixed(1)} ms · 画质 ${(qualityScale * 100).toFixed(0)}%`;
+    els.fps.textContent = `${renderFps.toFixed(0)} fps · 渲染 ${renderCost.toFixed(1)} ms · 画质 ${Math.round((adaptivePR ?? BASE_PR) / BASE_PR * 100)}%`;
   }
 
   if (debugOn && now - lastDebugAt > 100) {
@@ -1656,7 +1692,7 @@ function frame(now) {
           ? new Date(window.__HOLO_BUILD__).toLocaleString('zh-CN', { hour12: false })
           : 'dev'
       }`,
-      `画面 ${renderFps.toFixed(0)} fps · 渲染 ${renderCost.toFixed(1)} ms · 画质 ${(qualityScale * 100).toFixed(0)}%`,
+      `画面 ${renderFps.toFixed(0)} fps · 渲染 ${renderCost.toFixed(1)} ms · 画质 ${Math.round((adaptivePR ?? BASE_PR) / BASE_PR * 100)}%`,
       `手势识别 ${fps} fps`,
       `张开度 ${out.openness.toFixed(2)}  (张开>${CONFIG.gesture.openOn} / 握拳<${CONFIG.gesture.fistOn})`,
       `捏合比 ${out.pinchRatio.toFixed(2)}  (捏合<${CONFIG.gesture.pinchOn})`,
@@ -4777,12 +4813,39 @@ class HandTracker {
     }
   }
 
+  /**
+   * 预先抓模型字节。原来 model 是在 wasm 加载完之后才开始下的，
+   * 8.6MB 串在 wasm 后面，慢机型能卡十几秒。
+   * 现在两个请求并行，总耗时从 A+B 变成 max(A,B)。
+   */
+  _prefetchModel(url) {
+    if (!this._modelPromise) {
+      this._modelPromise = fetch(url, { cache: 'force-cache' })
+        .then((r) => {
+          if (!r.ok) throw new Error(`model ${r.status}`);
+          return r.arrayBuffer();
+        })
+        .catch((err) => {
+          console.warn('[hands] 模型预取失败，退回流式加载：', err);
+          return null;
+        });
+    }
+    return this._modelPromise;
+  }
+
   async _createLandmarker(mp, wasmPath, modelPath) {
     const { FilesetResolver, HandLandmarker } = mp;
-    const fileset = await FilesetResolver.forVisionTasks(wasmPath);
+    // 并行：wasm 解析 和 模型下载 同时进行
+    const [fileset, modelBuffer] = await Promise.all([
+      FilesetResolver.forVisionTasks(wasmPath),
+      this._prefetchModel(modelPath),
+    ]);
     const make = (delegate) =>
       HandLandmarker.createFromOptions(fileset, {
-        baseOptions: { modelAssetPath: modelPath, delegate },
+        // 有预取到的字节就直接喂 buffer，省掉第二次网络往返
+        baseOptions: modelBuffer
+          ? { modelAssetBuffer: new Uint8Array(modelBuffer), delegate }
+          : { modelAssetPath: modelPath, delegate },
         runningMode: 'VIDEO',
         numHands: 1,
         // 手机远景 + 手部运动模糊时默认 0.5 太严，手会一帧有、一帧没有；
@@ -4858,6 +4921,33 @@ class HandTracker {
     }
     this.running = true;
     this._tick();
+  }
+
+  /**
+   * 预热：用户看开场动画的那十几秒，把 wasm 和模型先下进 HTTP 缓存。
+   * 等他点「启用摄像头」时这两个已经是本地缓存，几乎瞬开。
+   * 失败无所谓，真加载时会重试。
+   */
+  warmup() {
+    if (!HAS_VENDOR || this._warmed) return;
+    this._warmed = true;
+
+    // wasm 用 <link rel=prefetch> 走浏览器最低优先级，不抢首屏带宽
+    const addHint = (href, as) => {
+      if (document.querySelector(`link[data-warm="${href}"]`)) return;
+      const l = document.createElement('link');
+      l.rel = 'prefetch';
+      l.as = as;
+      l.href = href;
+      l.dataset.warm = href;
+      l.crossOrigin = 'anonymous';
+      document.head.appendChild(l);
+    };
+    addHint(new URL('vision_wasm_internal.wasm', LOCAL_WASM + '/').href, 'fetch');
+    addHint(new URL('vision_wasm_internal.js', LOCAL_WASM + '/').href, 'script');
+
+    // 模型已经有并行预取，这里只提前点火
+    this._prefetchModel(LOCAL_MODEL);
   }
 
   /** 有手 → 60fps；手离开 2 秒 → 退回 30fps（摄像头和识别一起降，直接降温） */
